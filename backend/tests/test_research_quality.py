@@ -7,6 +7,7 @@ from backend.app.research_sources import (
     parse_intents_home,
     parse_official_hub_metrics,
     parse_stablecoin_chain_assets,
+    parse_stablecoin_chain_aggregate,
     select_chain_from_topic,
     summarise_daily_rows,
 )
@@ -192,19 +193,31 @@ def test_stablecoin_parser_reads_chain_circulating_and_historical_comparisons():
 
 
 
-def test_chain_selector_does_not_match_stable_inside_stablecoin():
+def test_chain_selector_ignores_negated_chain_and_prefers_positive_chain():
     names = ["Stable", "Near", "Ethereum"]
 
-    selected = select_chain_from_topic(
+    assert select_chain_from_topic(
         "Evaluate the NEAR ecosystem, including stablecoin supply and liquidity.",
         names,
         "Near",
-    )
-
-    assert selected == "Near"
+    ) == "Near"
     assert select_chain_from_topic(
         "Analyse the NEAR ecosystem and confirm it is NEAR, not Stable.",
         names,
         "Near",
     ) == "Near"
+    assert select_chain_from_topic(
+        "Analyse the Stable chain, not NEAR.",
+        names,
+        "Near",
+    ) == "Stable"
     assert select_chain_from_topic("Analyse Stable chain TVL", names, "Near") == "Stable"
+
+
+def test_stablecoin_chain_aggregate_parser_matches_exact_chain_name():
+    rows = [
+        {"name": "Stable", "totalCirculating": 99_000_000},
+        {"name": "Near", "totalCirculating": 123_456_789},
+    ]
+    assert parse_stablecoin_chain_aggregate(rows, "Near") == 123_456_789
+    assert parse_stablecoin_chain_aggregate(rows, "Ethereum") is None
