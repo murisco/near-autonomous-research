@@ -504,3 +504,55 @@ async def collect_official_near_context() -> dict:
             "https://docs.near-intents.org/llms.txt",
         ],
     }
+
+
+async def collect_near_agent_projects(limit: int = 8) -> dict:
+    """Discover public NEAR agent repositories and report observable GitHub signals only."""
+    query_url = "https://api.github.com/search/repositories"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "MERIDIAN-Autonomous-Research/0.4",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    params = {"q": 'NEAR (agent OR agents) blockchain', "sort": "updated", "order": "desc", "per_page": min(limit, 10)}
+    timeout = httpx.Timeout(18.0, connect=7.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
+            response = await client.get(query_url, params=params)
+            response.raise_for_status()
+            payload = response.json()
+        items = payload.get("items", []) if isinstance(payload, dict) else []
+        projects = []
+        for item in items[:limit]:
+            if not isinstance(item, dict):
+                continue
+            projects.append({
+                "name": item.get("full_name"),
+                "description": item.get("description"),
+                "url": item.get("html_url"),
+                "language": item.get("language"),
+                "stars": item.get("stargazers_count"),
+                "forks": item.get("forks_count"),
+                "open_issues": item.get("open_issues_count"),
+                "last_pushed_at": item.get("pushed_at"),
+                "created_at": item.get("created_at"),
+                "archived": item.get("archived", False),
+                "source": "GitHub public repository search",
+                "evidence_limit": "Repository metadata is a developer-interest/activity signal, not proof of deployed agents, active users, production usage, or revenue.",
+            })
+        return {
+            "status": "available" if projects else "no_results",
+            "query": params["q"],
+            "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            "total_count": payload.get("total_count", 0) if isinstance(payload, dict) else 0,
+            "projects": projects,
+            "source": "https://api.github.com/search/repositories",
+            "limitations": "GitHub search is relevance-ranked and incomplete; stars, forks and pushes do not prove production adoption.",
+        }
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        return {
+            "status": "unavailable",
+            "projects": [],
+            "reason": f"GitHub repository discovery failed: {type(exc).__name__}",
+            "source": "https://api.github.com/search/repositories",
+        }
