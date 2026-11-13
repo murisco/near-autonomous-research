@@ -7,10 +7,10 @@ type DashboardData = {
   reports_generated: number;
   quoted_sales_usd: number;
   revenue_received_usd: number;
-  simulated_inference_spend_usd: number;
+  estimated_inference_spend_usd: number;
   projected_profit_usd: number;
   today_inference_budget_usd: number;
-  today_inference_spend_usd: number;
+  today_estimated_inference_spend_usd: number;
   payments_enabled: boolean;
   mainnet_execution_enabled: boolean;
   data_mode: string;
@@ -140,7 +140,7 @@ export default function Home() {
   }
 
   const budgetUsed = dashboard
-    ? Math.min(100, (dashboard.today_inference_spend_usd / Math.max(0.01, dashboard.today_inference_budget_usd)) * 100)
+    ? Math.min(100, (dashboard.today_estimated_inference_spend_usd / Math.max(0.01, dashboard.today_inference_budget_usd)) * 100)
     : 0;
 
   return (
@@ -231,13 +231,13 @@ export default function Home() {
               <span className="chart-icon">⌁</span>
             </div>
             <div className="economics-list">
-              <Economics label="Estimated inference spend" value={dashboard ? money(dashboard.simulated_inference_spend_usd) : "—"} />
+              <Economics label="Estimated inference spend" value={dashboard ? money(dashboard.estimated_inference_spend_usd) : "—"} />
               <Economics label="Projected profit" value={dashboard ? money(dashboard.projected_profit_usd) : "—"} />
               <Economics label="Operator share" value={rules ? rules.revenue_split.operator_percent + "%" : "—"} />
               <Economics label="Contributor share" value={rules ? rules.revenue_split.contributors_percent + "%" : "—"} />
             </div>
             <div className="budget-block">
-              <div className="budget-head"><span>Daily inference budget</span><strong>{dashboard ? money(dashboard.today_inference_spend_usd) + " / " + money(dashboard.today_inference_budget_usd) : "—"}</strong></div>
+              <div className="budget-head"><span>Daily inference budget</span><strong>{dashboard ? money(dashboard.today_estimated_inference_spend_usd) + " / " + money(dashboard.today_inference_budget_usd) : "—"}</strong></div>
               <div className="budget-track"><div className="budget-fill" style={{ width: budgetUsed + "%" }} /></div>
               <div className="budget-caption">Inference costs are estimates and new orders are blocked at the configured daily limit.</div>
             </div>
