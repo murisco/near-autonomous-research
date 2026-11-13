@@ -103,7 +103,7 @@ export default function Home() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [events, setEvents] = useState<LedgerEvent[]>([]);
   const [rules, setRules] = useState<Rules | null>(null);
-  const [topic, setTopic] = useState("Assess NEAR's autonomous business infrastructure and ecosystem activity");
+  const [topic, setTopic] = useState("");
   const [price, setPrice] = useState("10");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -249,7 +249,7 @@ export default function Home() {
             <p className="panel-subtitle">Turn a research question into a structured onchain intelligence brief.</p>
             <form onSubmit={submitOrder} className="order-form">
               <label htmlFor="topic">Research question</label>
-              <textarea id="topic" value={topic} onChange={(event) => setTopic(event.target.value)} minLength={8} maxLength={500} required />
+              <textarea id="topic" value={topic} onChange={(event) => setTopic(event.target.value)} placeholder="Ask anything here or type your research question..." minLength={8} maxLength={500} required />
               <div className="form-row">
                 <div className="price-field">
                   <label htmlFor="price">Report quote (USD)</label>
