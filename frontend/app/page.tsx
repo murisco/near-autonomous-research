@@ -268,7 +268,7 @@ export default function Home() {
                 <div className="eyebrow">GENERATED OUTPUT · {selectedReport.data_mode.toUpperCase().replaceAll("_", " ")}</div>
                 <h2>{selectedReport.title}</h2>
               </div>
-              <button className="close-button" onClick={() => setSelectedReport(null)}>Close ×</button>
+              <button className="close-button" onClick={() => { setSelectedReport(null); setPaymentQuote(null); }}>Close ×</button>
             </div>
             <pre className="report-content">{selectedReport.markdown}</pre>
           </section>
