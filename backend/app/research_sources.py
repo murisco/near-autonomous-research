@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import html
 import os
 import re
@@ -154,6 +155,55 @@ def historical_change(history: list[dict], days: int) -> float | None:
     return round((latest_value / previous_value - 1) * 100, 2)
 
 
+def analyse_tvl_history(current_tvl: float, history: list[dict], days: int = 30) -> dict:
+    """Flag rapid TVL moves and disagreement between current and historical endpoints."""
+    valid = []
+    for row in history:
+        stamp = timestamp_seconds(row.get("date"))
+        value = as_float(row.get("tvl"))
+        if stamp is not None and value is not None:
+            valid.append((stamp, value))
+    valid.sort(key=lambda item: item[0])
+    if not valid:
+        return {"status": "unavailable", "warnings": ["No historical observations available for TVL anomaly checks."]}
+
+    latest_stamp, latest_value = valid[-1]
+    delta = ((current_tvl / latest_value) - 1) * 100 if latest_value > 0 else None
+    cutoff = latest_stamp - days * 86400
+    recent = [item for item in valid if item[0] >= cutoff]
+    daily_moves = []
+    for previous, current in zip(recent, recent[1:]):
+        elapsed = current[0] - previous[0]
+        if 20 * 3600 <= elapsed <= 52 * 3600 and previous[1] > 0:
+            daily_moves.append({
+                "date": datetime.fromtimestamp(current[0], timezone.utc).date().isoformat(),
+                "change_percent": round((current[1] / previous[1] - 1) * 100, 2),
+            })
+    largest_move = max(daily_moves, key=lambda item: abs(item["change_percent"]), default=None)
+    max_increase = max((item["change_percent"] for item in daily_moves), default=None)
+    max_decrease = min((item["change_percent"] for item in daily_moves), default=None)
+    warnings = []
+    if delta is not None and abs(delta) > 10:
+        warnings.append(
+            "Current chain TVL differs from the latest historical observation by more than 10%; check endpoint timing and data consistency."
+        )
+    if largest_move and abs(largest_move["change_percent"]) > 25:
+        warnings.append(
+            "A single approximately daily TVL move exceeded 25%; inspect constituent assets and source snapshots before interpreting it as organic growth."
+        )
+    return {
+        "status": "available",
+        "latest_history_at": datetime.fromtimestamp(latest_stamp, timezone.utc).isoformat(),
+        "latest_history_tvl_usd": round(latest_value, 2),
+        "current_vs_latest_history_percent": round(delta, 2) if delta is not None else None,
+        "largest_daily_move": largest_move,
+        "max_daily_increase_percent": max_increase,
+        "max_daily_decrease_percent": max_decrease,
+        "daily_observations_checked": len(daily_moves),
+        "warnings": warnings,
+    }
+
+
 async def collect_defillama_context(topic: str, default_chain: str = "Near") -> dict:
     timeout = httpx.Timeout(20.0, connect=8.0)
     headers = {"User-Agent": "MERIDIAN-Autonomous-Research/0.3"}
@@ -220,7 +270,14 @@ async def collect_defillama_context(topic: str, default_chain: str = "Near") -> 
         if latest_stamp is not None else None
     )
     top_sum = sum(item["chain_tvl_usd"] for item in eligible)
-    warnings = []
+    tvl_anomalies = analyse_tvl_history(current_tvl, clean_history)
+    warnings = list(tvl_anomalies.get("warnings") or [])
+    seven_day_change = historical_change(clean_history, 7)
+    thirty_day_change = historical_change(clean_history, 30)
+    if seven_day_change is not None and seven_day_change > 50:
+        warnings.append("Chain TVL increased by more than 50% over 7 days; verify the underlying assets and daily observations before calling this organic growth.")
+    if thirty_day_change is not None and thirty_day_change > 100:
+        warnings.append("Chain TVL more than doubled over 30 days; treat the trend as an anomaly requiring constituent-level validation.")
     if age_hours is not None and age_hours > 72:
         warnings.append("Historical chain TVL data is more than 72 hours old.")
     if top_sum > current_tvl * 1.05:
@@ -235,8 +292,9 @@ async def collect_defillama_context(topic: str, default_chain: str = "Near") -> 
     return {
         "chain": selected,
         "current_tvl_usd": current_tvl,
-        "change_7d_percent": historical_change(clean_history, 7),
-        "change_30d_percent": historical_change(clean_history, 30),
+        "change_7d_percent": seven_day_change,
+        "change_30d_percent": thirty_day_change,
+        "tvl_anomaly_checks": tvl_anomalies,
         "history_points": len(clean_history),
         "history_latest_at": datetime.fromtimestamp(latest_stamp, timezone.utc).isoformat() if latest_stamp else None,
         "history_age_hours": round(age_hours, 2) if age_hours is not None else None,
@@ -253,6 +311,139 @@ async def collect_defillama_context(topic: str, default_chain: str = "Near") -> 
             DEFILLAMA_BASE + "/protocols",
             "https://docs.llama.fi/analysts/data-definitions",
         ],
+    }
+
+
+STABLECOINS_BASE = "https://stablecoins.llama.fi"
+
+
+def _stablecoin_usd_value(value: Any) -> float | None:
+    if isinstance(value, dict):
+        for key in ("peggedUSD", "peggedUsd", "usd", "value"):
+            parsed = as_float(value.get(key))
+            if parsed is not None:
+                return parsed
+        return None
+    return as_float(value)
+
+
+async def collect_stablecoin_context(chain: str = "Near") -> dict:
+    """Collect chain-level stablecoin history and per-asset circulating supply from DefiLlama."""
+    headers = {"User-Agent": "MERIDIAN-Autonomous-Research/0.4"}
+    timeout = httpx.Timeout(20.0, connect=8.0)
+    chart_url = STABLECOINS_BASE + "/stablecoincharts/" + quote(chain, safe="")
+    assets_url = STABLECOINS_BASE + "/stablecoins?includePrices=true"
+    try:
+        async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
+            chart_response, assets_response = await asyncio.gather(
+                client.get(chart_url), client.get(assets_url), return_exceptions=True
+            )
+        chart = []
+        assets_payload = {}
+        errors = []
+        if not isinstance(chart_response, Exception):
+            chart_response.raise_for_status()
+            chart = chart_response.json()
+        else:
+            errors.append("chain_history_unavailable")
+        if not isinstance(assets_response, Exception):
+            assets_response.raise_for_status()
+            assets_payload = assets_response.json()
+        else:
+            errors.append("stablecoin_catalogue_unavailable")
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        return {
+            "status": "unavailable", "chain": chain, "assets": [],
+            "reason": "DefiLlama stablecoin source failed: " + type(exc).__name__,
+            "sources": [chart_url, assets_url],
+        }
+
+    history = []
+    if isinstance(chart, list):
+        for row in chart:
+            if not isinstance(row, dict):
+                continue
+            stamp = timestamp_seconds(row.get("date"))
+            value = _stablecoin_usd_value(
+                row.get("totalCirculatingUSD", row.get("totalCirculatingUsd", row.get("totalCirculating")))
+            )
+            if stamp is not None and value is not None:
+                history.append({"date": stamp, "tvl": value})
+    history.sort(key=lambda row: row["date"])
+    latest = history[-1] if history else None
+
+    if isinstance(assets_payload, dict):
+        raw_assets = assets_payload.get("peggedAssets") or assets_payload.get("stablecoins") or []
+    elif isinstance(assets_payload, list):
+        raw_assets = assets_payload
+    else:
+        raw_assets = []
+
+    asset_rows = []
+    target = chain.casefold()
+    for asset in raw_assets:
+        if not isinstance(asset, dict):
+            continue
+        circulating = asset.get("chainCirculating") or {}
+        matching = next((value for key, value in circulating.items() if str(key).casefold() == target), None) if isinstance(circulating, dict) else None
+        if matching is None:
+            chain_names = asset.get("chains") or []
+            if not any(str(value).casefold() == target for value in chain_names):
+                continue
+            continue
+        current_block = matching.get("current") if isinstance(matching, dict) else matching
+        current_value = _stablecoin_usd_value(current_block)
+        if current_value is None or current_value <= 0:
+            continue
+        prev_day = _stablecoin_usd_value(matching.get("circulatingPrevDay")) if isinstance(matching, dict) else None
+        prev_week = _stablecoin_usd_value(matching.get("circulatingPrevWeek")) if isinstance(matching, dict) else None
+        prev_month = _stablecoin_usd_value(matching.get("circulatingPrevMonth")) if isinstance(matching, dict) else None
+        def change_from(previous):
+            return round((current_value / previous - 1) * 100, 2) if previous and previous > 0 else None
+        asset_rows.append({
+            "name": asset.get("name") or asset.get("symbol") or "Unknown stablecoin",
+            "symbol": asset.get("symbol"),
+            "peg_type": asset.get("pegType"),
+            "current_supply_usd": round(current_value, 2),
+            "change_1d_percent": change_from(prev_day),
+            "change_7d_percent": change_from(prev_week),
+            "change_30d_percent": change_from(prev_month),
+        })
+    asset_rows.sort(key=lambda item: item["current_supply_usd"], reverse=True)
+    reconstructed_total = sum(item["current_supply_usd"] for item in asset_rows) if asset_rows else None
+    chart_total = latest["tvl"] if latest else None
+    total = chart_total if chart_total is not None else reconstructed_total
+    total_method = (
+        "DefiLlama chain-level stablecoin history" if chart_total is not None
+        else "sum of returned per-asset chainCirculating values; catalogue coverage may be incomplete"
+    )
+    retrieved = datetime.now(timezone.utc)
+    history_for_change = [{"date": row["date"], "tvl": row["tvl"]} for row in history]
+    warnings = []
+    if not asset_rows:
+        warnings.append("Per-stablecoin chain breakdown was unavailable; do not treat the aggregate as a token-level liquidity map.")
+    if chart_total is None:
+        warnings.append("Chain-level stablecoin history was unavailable; aggregate uses returned asset rows only or is unavailable.")
+    if chart_total is not None and reconstructed_total is not None and reconstructed_total > 0:
+        divergence = (reconstructed_total / chart_total - 1) * 100
+        if abs(divergence) > 15:
+            warnings.append("Per-asset supply sum differs from chain aggregate by more than 15%; catalogue coverage, aliases, or endpoint timing may differ.")
+    return {
+        "status": "available" if total is not None or asset_rows else "unavailable",
+        "chain": chain,
+        "total_supply_usd": round(total, 2) if total is not None else None,
+        "total_method": total_method,
+        "history_points": len(history),
+        "as_of": datetime.fromtimestamp(latest["date"], timezone.utc).isoformat() if latest else None,
+        "change_7d_percent": historical_change(history_for_change, 7),
+        "change_30d_percent": historical_change(history_for_change, 30),
+        "assets": asset_rows[:15],
+        "asset_count": len(asset_rows),
+        "asset_sum_usd": round(reconstructed_total, 2) if reconstructed_total is not None else None,
+        "quality_warnings": warnings + errors,
+        "retrieved_at": retrieved.isoformat(),
+        "sources": [chart_url, assets_url],
+        "limitations": "Stablecoin supply is not equivalent to available DEX liquidity, trading volume, or user adoption; coverage and classification depend on DefiLlama's stablecoin catalogue.",
     }
 
 
@@ -295,40 +486,64 @@ def _first_numeric(row: dict, keys: tuple[str, ...]) -> tuple[str | None, float 
 
 
 def summarise_daily_rows(rows: list[dict], metric_keys: tuple[str, ...], label: str) -> dict:
-    usable = []
+    """Summarise only completed UTC days; do not compare a partial current day."""
+    today_utc = datetime.now(timezone.utc).date()
+    by_day: dict[str, dict] = {}
     for row in rows:
         date_label, stamp = _row_date(row)
         metric_key, value = _first_numeric(row, metric_keys)
-        if stamp is not None and value is not None:
-            usable.append({"date": date_label, "timestamp": stamp, "value": value, "field": metric_key})
-    usable.sort(key=lambda item: item["timestamp"])
+        if stamp is None or value is None or not date_label:
+            continue
+        try:
+            day = datetime.fromtimestamp(stamp, timezone.utc).date()
+        except (OverflowError, OSError, ValueError):
+            continue
+        if day >= today_utc:
+            continue
+        entry = {"date": day.isoformat(), "timestamp": stamp, "value": value, "field": metric_key}
+        by_day[day.isoformat()] = entry
+    usable = sorted(by_day.values(), key=lambda item: item["timestamp"])
     if not usable:
-        return {"status": "unavailable", "metric": label, "reason": "No recognised daily metric field was returned."}
+        return {
+            "status": "unavailable", "metric": label,
+            "reason": "No completed UTC daily observations were returned; the current day is excluded as potentially partial.",
+        }
 
-    latest = usable[-1]["timestamp"]
-    last_7 = [row for row in usable if row["timestamp"] >= latest - 7 * 86400]
-    last_30 = [row for row in usable if row["timestamp"] >= latest - 30 * 86400]
-    previous_7 = [
-        row for row in usable
-        if latest - 14 * 86400 <= row["timestamp"] < latest - 7 * 86400
-    ]
+    latest_day = datetime.fromisoformat(usable[-1]["date"]).date()
+    recent_start = latest_day - timedelta(days=6)
+    previous_start = latest_day - timedelta(days=13)
+    previous_end = latest_day - timedelta(days=7)
+    month_start = latest_day - timedelta(days=29)
+    last_7 = [row for row in usable if recent_start <= datetime.fromisoformat(row["date"]).date() <= latest_day]
+    previous_7 = [row for row in usable if previous_start <= datetime.fromisoformat(row["date"]).date() <= previous_end]
+    last_30 = [row for row in usable if month_start <= datetime.fromisoformat(row["date"]).date() <= latest_day]
     prior_total = sum(row["value"] for row in previous_7)
     latest_total = sum(row["value"] for row in last_7)
-    change = round((latest_total / prior_total - 1) * 100, 2) if prior_total > 0 and previous_7 else None
+    change = (
+        round((latest_total / prior_total - 1) * 100, 2)
+        if prior_total > 0 and len(last_7) >= 5 and len(previous_7) >= 5 else None
+    )
     return {
         "status": "available",
         "metric": label,
         "source_field": usable[-1]["field"],
         "latest_day": usable[-1]["date"],
         "latest_day_value": round(usable[-1]["value"], 2),
+        "latest_day_is_complete_utc": True,
         "last_7d_total": round(latest_total, 2),
         "last_7d_days": len(last_7),
+        "last_7d_expected_days": 7,
+        "last_7d_window_complete": len(last_7) == 7,
+        "previous_7d_total": round(prior_total, 2),
+        "previous_7d_days": len(previous_7),
+        "previous_7d_window_complete": len(previous_7) == 7,
         "last_30d_total": round(sum(row["value"] for row in last_30), 2),
         "last_30d_days": len(last_30),
+        "last_30d_expected_days": 30,
         "last_7d_vs_previous_7d_percent": change,
         "history_points": len(usable),
+        "excluded_current_utc_day": True,
     }
-
 
 async def collect_nearblocks_activity() -> dict:
     headers = {"User-Agent": "MERIDIAN-Autonomous-Research/0.3"}
@@ -507,52 +722,164 @@ async def collect_official_near_context() -> dict:
 
 
 async def collect_near_agent_projects(limit: int = 8) -> dict:
-    """Discover public NEAR agent repositories and report observable GitHub signals only."""
+    """Inspect GitHub README and recent commits; classify only README-supported candidates."""
     query_url = "https://api.github.com/search/repositories"
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": "MERIDIAN-Autonomous-Research/0.4",
+        "User-Agent": "MERIDIAN-Autonomous-Research/0.5",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    params = {"q": 'NEAR (agent OR agents) blockchain', "sort": "updated", "order": "desc", "per_page": min(limit, 10)}
+    queries = ['near agent in:readme', 'near autonomous agent in:readme']
     timeout = httpx.Timeout(18.0, connect=7.0)
     try:
         async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
-            response = await client.get(query_url, params=params)
-            response.raise_for_status()
-            payload = response.json()
-        items = payload.get("items", []) if isinstance(payload, dict) else []
-        projects = []
-        for item in items[:limit]:
-            if not isinstance(item, dict):
-                continue
-            projects.append({
-                "name": item.get("full_name"),
-                "description": item.get("description"),
-                "url": item.get("html_url"),
-                "language": item.get("language"),
-                "stars": item.get("stargazers_count"),
-                "forks": item.get("forks_count"),
-                "open_issues": item.get("open_issues_count"),
-                "last_pushed_at": item.get("pushed_at"),
-                "created_at": item.get("created_at"),
-                "archived": item.get("archived", False),
-                "source": "GitHub public repository search",
-                "evidence_limit": "Repository metadata is a developer-interest/activity signal, not proof of deployed agents, active users, production usage, or revenue.",
-            })
+            searches = await asyncio.gather(
+                *(client.get(query_url, params={"q": query, "sort": "updated", "order": "desc", "per_page": 10}) for query in queries),
+                return_exceptions=True,
+            )
+            candidates = {}
+            total_count = 0
+            search_errors = 0
+            for response in searches:
+                if isinstance(response, Exception):
+                    search_errors += 1
+                    continue
+                response.raise_for_status()
+                payload = response.json()
+                total_count += int(payload.get("total_count", 0) or 0)
+                for item in payload.get("items", []):
+                    if isinstance(item, dict) and item.get("full_name"):
+                        candidates[item["full_name"].casefold()] = item
+
+            selected = sorted(
+                candidates.values(),
+                key=lambda item: item.get("pushed_at") or item.get("updated_at") or "",
+                reverse=True,
+            )[:max(1, min(limit, 10))]
+
+            async def inspect(item):
+                full_name = item["full_name"]
+                readme_task = client.get(
+                    "https://api.github.com/repos/" + full_name + "/readme",
+                    headers={"Accept": "application/vnd.github+json"},
+                )
+                commits_task = client.get(
+                    "https://api.github.com/repos/" + full_name + "/commits",
+                    params={"per_page": 3},
+                )
+                readme_response, commits_response = await asyncio.gather(
+                    readme_task, commits_task, return_exceptions=True
+                )
+                readme_text = ""
+                readme_status = "unavailable"
+                if not isinstance(readme_response, Exception) and readme_response.status_code < 400:
+                    try:
+                        readme_payload = readme_response.json()
+                        encoded = readme_payload.get("content", "")
+                        readme_text = base64.b64decode(encoded).decode("utf-8", errors="replace")
+                        readme_status = "inspected"
+                    except (ValueError, TypeError, KeyError):
+                        readme_status = "unreadable"
+                commits = []
+                if not isinstance(commits_response, Exception) and commits_response.status_code < 400:
+                    try:
+                        for commit_row in commits_response.json()[:3]:
+                            commit = (commit_row.get("commit") or {}) if isinstance(commit_row, dict) else {}
+                            author = commit.get("author") or {}
+                            message = (commit.get("message") or "").splitlines()[0][:180]
+                            commits.append({
+                                "date": author.get("date"),
+                                "message": message,
+                                "url": commit_row.get("html_url"),
+                            })
+                    except (ValueError, TypeError, AttributeError):
+                        commits = []
+                combined = " ".join([
+                    str(item.get("name") or ""), str(item.get("description") or ""), readme_text[:30000]
+                ]).lower()
+                near_patterns = (
+                    r"near protocol", r"near blockchain", r"near-sdk", r"nearcore",
+                    r"near testnet", r"near mainnet", r"near account", r"near intents",
+                    r"near ai", r"\bnep-\d+\b",
+                )
+                agent_patterns = (
+                    r"\bai agent\b", r"\bautonomous agent\b", r"\bagentic\b",
+                    r"\bmulti-agent\b", r"\bmulti agent\b", r"\bllm agent\b",
+                    r"\bagent swarm\b", r"\bagent runtime\b", r"\bagent framework\b",
+                )
+                infrastructure_patterns = (
+                    r"agent framework", r"agent runtime", r"agent orchestration",
+                    r"agent infrastructure", r"sdk for agents", r"agent toolkit",
+                )
+                near_hits = [pattern for pattern in near_patterns if re.search(pattern, combined)]
+                agent_hits = [pattern for pattern in agent_patterns if re.search(pattern, combined)]
+                infra_hits = [pattern for pattern in infrastructure_patterns if re.search(pattern, combined)]
+                if readme_status == "inspected" and near_hits and agent_hits:
+                    if infra_hits and not re.search(r"\bautonomous agent\b|\bai agent\b|\bmulti-agent\b|\bagentic\b", combined):
+                        classification = "agent_infrastructure"
+                    else:
+                        classification = "autonomous_ai_agent_candidate"
+                elif readme_status == "inspected" and near_hits and infra_hits:
+                    classification = "agent_infrastructure"
+                elif readme_status == "inspected" and near_hits:
+                    classification = "related_near_ecosystem_project_not_verified_as_agent"
+                else:
+                    classification = "unverified_candidate"
+                clean_description = str(item.get("description") or "")[:300]
+                return {
+                    "name": full_name,
+                    "description": clean_description,
+                    "url": item.get("html_url"),
+                    "language": item.get("language"),
+                    "stars": item.get("stargazers_count"),
+                    "forks": item.get("forks_count"),
+                    "open_issues": item.get("open_issues_count"),
+                    "last_pushed_at": item.get("pushed_at"),
+                    "created_at": item.get("created_at"),
+                    "archived": item.get("archived", False),
+                    "classification": classification,
+                    "readme_status": readme_status,
+                    "readme_evidence": re.sub(r"\s+", " ", readme_text[:420]).strip() if readme_text else None,
+                    "near_evidence_patterns": near_hits,
+                    "agent_evidence_patterns": agent_hits,
+                    "recent_commits": commits,
+                    "latest_commit_at": commits[0].get("date") if commits else None,
+                    "source": "GitHub repository metadata, README API and recent commit API",
+                    "evidence_limit": "README and commit metadata are public repository evidence, not independent proof of a deployed agent, production users, or revenue.",
+                }
+
+            inspected = await asyncio.gather(*(inspect(item) for item in selected), return_exceptions=True)
+        projects = [item for item in inspected if isinstance(item, dict)]
+        projects.sort(key=lambda item: (
+            item["classification"] != "autonomous_ai_agent_candidate",
+            item["classification"] != "agent_infrastructure",
+            item.get("latest_commit_at") or item.get("last_pushed_at") or "",
+        ), reverse=False)
+        categories = {
+            "autonomous_ai_agent_candidates": [item for item in projects if item["classification"] == "autonomous_ai_agent_candidate"],
+            "agent_infrastructure": [item for item in projects if item["classification"] == "agent_infrastructure"],
+            "related_ecosystem_projects": [item for item in projects if item["classification"] == "related_near_ecosystem_project_not_verified_as_agent"],
+            "unverified_candidates": [item for item in projects if item["classification"] == "unverified_candidate"],
+        }
         return {
             "status": "available" if projects else "no_results",
-            "query": params["q"],
+            "queries": queries,
             "retrieved_at": datetime.now(timezone.utc).isoformat(),
-            "total_count": payload.get("total_count", 0) if isinstance(payload, dict) else 0,
+            "total_search_matches": total_count,
+            "search_errors": search_errors,
             "projects": projects,
+            **categories,
             "source": "https://api.github.com/search/repositories",
-            "limitations": "GitHub search is relevance-ranked and incomplete; stars, forks and pushes do not prove production adoption.",
+            "limitations": "GitHub search is incomplete. README classification is a screening signal, not a code audit. Stars, forks, pushes, and README claims do not prove deployment, active use, users, or revenue.",
         }
     except (httpx.HTTPError, ValueError, TypeError) as exc:
         return {
             "status": "unavailable",
             "projects": [],
-            "reason": f"GitHub repository discovery failed: {type(exc).__name__}",
+            "autonomous_ai_agent_candidates": [],
+            "agent_infrastructure": [],
+            "related_ecosystem_projects": [],
+            "unverified_candidates": [],
+            "reason": "GitHub repository discovery failed: " + type(exc).__name__,
             "source": "https://api.github.com/search/repositories",
         }
