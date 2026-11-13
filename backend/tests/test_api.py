@@ -6,31 +6,33 @@ from backend.app.main import app
 POST_HEADERS = {"X-Meridian-Requested": "1"}
 
 
-def configure_email_auth(monkeypatch):
+def configure_near_auth(monkeypatch):
     from backend.app import main as main_module
 
-    monkeypatch.setenv("MERIDIAN_AUTH_SECRET", "test-auth-secret-value-longer-than-32-characters")
-    monkeypatch.setenv("MERIDIAN_ADMIN_EMAILS", "owner@example.com")
-    sent_codes = {}
+    monkeypatch.setenv("MERIDIAN_ADMIN_ACCOUNT_IDS", "owner.near")
 
-    async def fake_deliver(email, code):
-        sent_codes[email] = code
+    def valid_signature(*args):
+        return True
 
-    monkeypatch.setattr(main_module, "deliver_login_code", fake_deliver)
-    return sent_codes
+    async def has_full_access(account_id, public_key):
+        return True
+
+    monkeypatch.setattr(main_module, "verify_nep413_signature", valid_signature)
+    monkeypatch.setattr(main_module, "account_has_full_access_key", has_full_access)
 
 
-def sign_in(client, sent_codes, email):
-    requested = client.post(
-        "/api/auth/request-code",
-        json={"email": email},
-        headers=POST_HEADERS,
-    )
+def sign_in(client, account_id):
+    requested = client.post("/api/auth/nonce", json={}, headers=POST_HEADERS)
     assert requested.status_code == 200, requested.text
-    assert email in sent_codes
+    challenge = requested.json()
     verified = client.post(
-        "/api/auth/verify-code",
-        json={"email": email, "code": sent_codes[email]},
+        "/api/auth/verify",
+        json={
+            "challenge_id": challenge["challenge_id"],
+            "account_id": account_id,
+            "public_key": "ed25519:" + "1" * 44,
+            "signature": "A" * 88,
+        },
         headers=POST_HEADERS,
     )
     assert verified.status_code == 200, verified.text
@@ -38,9 +40,9 @@ def sign_in(client, sent_codes, email):
 
 
 def test_demo_order_generates_report_and_audit_events(monkeypatch):
-    sent_codes = configure_email_auth(monkeypatch)
+    configure_near_auth(monkeypatch)
     with TestClient(app, base_url="https://testserver") as client:
-        sign_in(client, sent_codes, "owner@example.com")
+        sign_in(client, "owner.near")
         response = client.post(
             "/api/demo/run",
             json={"topic": "Assess NEAR autonomous business infrastructure"},
@@ -67,9 +69,9 @@ def test_demo_order_generates_report_and_audit_events(monkeypatch):
 
 
 def test_business_rejects_price_below_minimum(monkeypatch):
-    sent_codes = configure_email_auth(monkeypatch)
+    configure_near_auth(monkeypatch)
     with TestClient(app, base_url="https://testserver") as client:
-        sign_in(client, sent_codes, "owner@example.com")
+        sign_in(client, "owner.near")
         response = client.post(
             "/api/orders",
             json={"topic": "Assess NEAR application activity", "price_usd": 2},
@@ -92,7 +94,7 @@ def test_health_and_safety_rules():
 def test_live_research_failure_is_preserved_in_audit_ledger(monkeypatch):
     from backend.app import main as main_module
 
-    sent_codes = configure_email_auth(monkeypatch)
+    configure_near_auth(monkeypatch)
 
     async def fail_research(topic, rules):
         raise main_module.ResearchSourceError("Public data provider unavailable.")
@@ -100,7 +102,7 @@ def test_live_research_failure_is_preserved_in_audit_ledger(monkeypatch):
     monkeypatch.setattr(main_module, "generate_report", fail_research)
 
     with TestClient(app, base_url="https://testserver") as client:
-        sign_in(client, sent_codes, "owner@example.com")
+        sign_in(client, "owner.near")
         response = client.post(
             "/api/orders",
             json={"topic": "Assess NEAR ecosystem activity", "price_usd": 10},
@@ -116,7 +118,7 @@ def test_live_research_failure_is_preserved_in_audit_ledger(monkeypatch):
 def test_live_order_returns_only_a_tidepool_dry_quote(monkeypatch):
     from backend.app import main as main_module
 
-    sent_codes = configure_email_auth(monkeypatch)
+    configure_near_auth(monkeypatch)
 
     async def live_report(topic, rules):
         return (
@@ -147,7 +149,7 @@ def test_live_order_returns_only_a_tidepool_dry_quote(monkeypatch):
     monkeypatch.setattr(main_module, "create_tidepool_dry_quote", sandbox_quote)
 
     with TestClient(app, base_url="https://testserver") as client:
-        sign_in(client, sent_codes, "owner@example.com")
+        sign_in(client, "owner.near")
         response = client.post(
             "/api/orders",
             json={"topic": "Assess NEAR ecosystem activity", "price_usd": 10},
@@ -172,7 +174,7 @@ def test_live_order_returns_only_a_tidepool_dry_quote(monkeypatch):
 def test_customers_cannot_read_other_customers_orders_or_admin_data(monkeypatch):
     from backend.app import main as main_module
 
-    sent_codes = configure_email_auth(monkeypatch)
+    configure_near_auth(monkeypatch)
 
     async def demo_report(topic, rules):
         return (
@@ -194,7 +196,7 @@ def test_customers_cannot_read_other_customers_orders_or_admin_data(monkeypatch)
     monkeypatch.setattr(main_module, "create_tidepool_dry_quote", no_payment_quote)
 
     with TestClient(app, base_url="https://testserver") as client:
-        sign_in(client, sent_codes, "customer-one@example.com")
+        sign_in(client, "customer-one.near")
         created = client.post(
             "/api/orders",
             json={"topic": "Research for customer one on NEAR", "price_usd": 10},
@@ -202,24 +204,66 @@ def test_customers_cannot_read_other_customers_orders_or_admin_data(monkeypatch)
         )
         assert created.status_code == 200, created.text
         private_order_id = created.json()["id"]
-        assert "buyer_email" not in created.json()
+        assert "buyer_account_id" not in created.json()
         assert "projected_profit_usd" not in created.json()
 
         client.post("/api/auth/logout", headers=POST_HEADERS)
-        sign_in(client, sent_codes, "customer-two@example.com")
+        sign_in(client, "customer-two.near")
         assert client.get("/api/orders").json()["items"] == []
         assert client.get(f"/api/orders/{private_order_id}").status_code == 404
         assert client.get("/api/dashboard").status_code == 403
         assert client.get("/api/ledger").json()["items"] == []
 
         client.post("/api/auth/logout", headers=POST_HEADERS)
-        sign_in(client, sent_codes, "owner@example.com")
+        sign_in(client, "owner.near")
         assert client.get("/api/orders").json()["count"] >= 1
         assert client.get("/api/dashboard").status_code == 200
 
 
-def test_email_sign_in_requires_browser_request_header(monkeypatch):
-    configure_email_auth(monkeypatch)
+def test_near_wallet_sign_in_requires_browser_request_header(monkeypatch):
+    configure_near_auth(monkeypatch)
     with TestClient(app) as client:
-        response = client.post("/api/auth/request-code", json={"email": "customer@example.com"})
+        response = client.post("/api/auth/nonce", json={})
         assert response.status_code == 403
+
+
+def test_near_challenge_is_single_use(monkeypatch):
+    configure_near_auth(monkeypatch)
+    with TestClient(app) as client:
+        requested = client.post("/api/auth/nonce", json={}, headers=POST_HEADERS)
+        challenge = requested.json()
+        payload = {
+            "challenge_id": challenge["challenge_id"],
+            "account_id": "customer.near",
+            "public_key": "ed25519:" + "1" * 44,
+            "signature": "A" * 88,
+        }
+        first = client.post("/api/auth/verify", json=payload, headers=POST_HEADERS)
+        assert first.status_code == 200, first.text
+        replay = client.post("/api/auth/verify", json=payload, headers=POST_HEADERS)
+        assert replay.status_code == 400
+
+
+def test_near_wallet_login_rejects_non_full_access_key(monkeypatch):
+    from backend.app import main as main_module
+
+    configure_near_auth(monkeypatch)
+
+    async def no_full_access(account_id, public_key):
+        return False
+
+    monkeypatch.setattr(main_module, "account_has_full_access_key", no_full_access)
+    with TestClient(app) as client:
+        challenge = client.post("/api/auth/nonce", json={}, headers=POST_HEADERS).json()
+        response = client.post(
+            "/api/auth/verify",
+            json={
+                "challenge_id": challenge["challenge_id"],
+                "account_id": "customer.near",
+                "public_key": "ed25519:" + "1" * 44,
+                "signature": "A" * 88,
+            },
+            headers=POST_HEADERS,
+        )
+        assert response.status_code == 401
+        assert "full-access key" in response.json()["detail"]
