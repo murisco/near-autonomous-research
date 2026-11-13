@@ -80,9 +80,11 @@ def serialize_order(order: Order, include_report: bool = False) -> dict:
     return payload
 
 
-async def process_order(db: Session, request: OrderCreate) -> dict:
+async def process_order(db: Session, request: OrderCreate, force_demo: bool = False) -> dict:
     try:
-        rules, inference_cost = enforce_order_policy(db, request.price_usd)
+        rules, inference_cost = enforce_order_policy(
+            db, request.price_usd, research_mode_override="demo" if force_demo else None
+        )
     except PolicyViolation as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -119,6 +121,7 @@ async def process_order(db: Session, request: OrderCreate) -> dict:
             "daily_inference_limit_usd": float(rules["limits"]["max_inference_spend_per_day"]),
         },
     )
+    add_event(db, order_id, "research_started", {"mode": (rules.get("research") or {}).get("mode", "demo")})
     try:
         title, markdown, data_mode, research_meta = await generate_report(request.topic, rules)
     except ResearchSourceError as exc:
@@ -129,7 +132,7 @@ async def process_order(db: Session, request: OrderCreate) -> dict:
     add_event(
         db,
         order_id,
-        "research_started",
+        "research_completed",
         {"provider": research_meta.get("provider"), "data_mode": data_mode},
     )
     profit = max(0.0, request.price_usd - inference_cost)
@@ -249,7 +252,7 @@ async def create_order(request: OrderCreate, db: Session = Depends(get_db)) -> d
 @app.post("/api/demo/run")
 async def run_demo(request: DemoRunRequest, db: Session = Depends(get_db)) -> dict:
     demo_request = OrderCreate(topic=request.topic, price_usd=10.0)
-    return await process_order(db, demo_request)
+    return await process_order(db, demo_request, force_demo=True)
 
 
 @app.get("/api/orders")
