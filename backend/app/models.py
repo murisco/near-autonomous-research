@@ -12,6 +12,7 @@ class Order(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     topic: Mapped[str] = mapped_column(String(500), nullable=False)
     buyer_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    buyer_account_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     price_usd: Mapped[float] = mapped_column(Float, nullable=False)
     inference_cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     projected_profit_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0)
@@ -71,7 +72,20 @@ class AuthSession(Base):
     __tablename__ = "auth_sessions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    email: Mapped[str] = mapped_column(String(320), index=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(320), index=True, nullable=False, default="")
+    account_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class NearLoginChallenge(Base):
+    __tablename__ = "near_login_challenges"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    nonce_b64: Mapped[str] = mapped_column(String(64), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    recipient: Mapped[str] = mapped_column(String(255), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
