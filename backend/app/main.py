@@ -5,7 +5,6 @@ import os
 from datetime import datetime, time, timedelta
 from uuid import uuid4
 import secrets
-import hmac
 import httpx
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -22,7 +21,7 @@ from .research import ResearchSourceError, generate_report
 from .schemas import DemoRunRequest, NearAuthVerifyRequest, OrderCreate
 from .auth import SESSION_COOKIE, SESSION_TTL_SECONDS, secure_cookie, token_digest
 from .near_auth import (
-    account_has_full_access_key, admin_account_ids, auth_recipient,
+    account_has_full_access_key, auth_recipient,
     is_admin_account, valid_account_id, verify_nep413_signature,
 )
 
