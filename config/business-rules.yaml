@@ -22,3 +22,7 @@ safety:
   payments_enabled: false
   mainnet_execution_enabled: false
   require_human_approval_for_payouts: true
+
+payments:
+  # Community sandbox quote only. Does not create a deposit address or transfer funds.
+  enable_sandbox_dry_quotes: true
