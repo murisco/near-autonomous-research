@@ -72,6 +72,19 @@ const money = (value: number) =>
 const prettyDate = (value: string) =>
   new Date(value).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
+function downloadReport(report: Report) {
+  const blob = new Blob([report.markdown], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const safeTitle = report.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 64) || "meridian-report";
+  link.href = url;
+  link.download = safeTitle + ".md";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch("/api/" + path, {
     ...options,
@@ -272,7 +285,7 @@ export default function Home() {
                 <div className="eyebrow">GENERATED OUTPUT · {selectedReport.data_mode.toUpperCase().replaceAll("_", " ")}</div>
                 <h2>{selectedReport.title}</h2>
               </div>
-              <button className="close-button" onClick={() => { setSelectedReport(null); setPaymentQuote(null); }}>Close ×</button>
+              <div className="report-actions"><button className="download-button" onClick={() => downloadReport(selectedReport)}>Download .md</button><button className="close-button" onClick={() => { setSelectedReport(null); setPaymentQuote(null); }}>Close ×</button></div>
             </div>
             <pre className="report-content">{selectedReport.markdown}</pre>
           </section>
