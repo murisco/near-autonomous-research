@@ -106,6 +106,7 @@ async def collect_defillama_context(topic: str) -> dict:
         raise ResearchSourceError("DefiLlama returned an unexpected protocol catalogue.")
 
     history = [row for row in history if isinstance(row, dict) and row.get("tvl") is not None]
+    history.sort(key=lambda row: int(row.get("date", 0)))
     if not history:
         raise ResearchSourceError("Historical TVL data was empty for " + selected_name + ".")
 
@@ -236,7 +237,7 @@ async def generate_live_report(topic: str) -> tuple[str, str, str, dict]:
         try:
             ai_analysis = await generate_near_ai_analysis(topic, context)
             ai_status = "completed"
-        except (httpx.HTTPError, ResearchSourceError):
+        except (httpx.HTTPError, ResearchSourceError, ValueError):
             ai_status = "unavailable_fallback_used"
 
     chain = context["chain"]
