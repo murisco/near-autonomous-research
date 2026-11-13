@@ -18,7 +18,7 @@ ACCOUNT_ID_RE = re.compile(r"^[a-z0-9._-]{2,64}$")
 
 
 def auth_recipient() -> str:
-    return os.getenv("MERIDIAN_NEAR_AUTH_RECIPIENT", "meridian-dashboard.up.railway.app").strip()
+    return os.getenv("MERIDIAN_NEAR_AUTH_RECIPIENT", "").strip() or "meridian-dashboard.up.railway.app"
 
 
 def valid_account_id(account_id: str) -> bool:
