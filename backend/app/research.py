@@ -515,107 +515,76 @@ def _customer_summary(
 
 
 async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | None, dict]:
-    """Use Gemini's free-tier API first; retain NEAR AI Cloud as an optional fallback."""
+    """Use Gemini only; never silently route research through NEAR AI Cloud."""
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-    near_key = os.getenv("NEAR_AI_API_KEY", "").strip()
+    model = os.getenv("GEMINI_MODEL", GEMINI_DEFAULT_MODEL)
 
-    if gemini_key:
-        model = os.getenv("GEMINI_MODEL", GEMINI_DEFAULT_MODEL)
-        payload = {
-            "system_instruction": {"parts": [{"text":
-                "You are MERIDIAN's blockchain research analyst. Use only supplied research context. "
-                "Never invent metrics, projects, capabilities, events or sources. Separate measured data, "
-                "publisher claims and analysis. Answer the exact question and cover each requested dimension. "
-                "NEAR Protocol means the NEAR blockchain, not DeFi protocols. State clearly when evidence is missing."
-            }]},
-            "contents": [{"role": "user", "parts": [{"text":
-                "Customer's exact research question: " + topic + "\n\n"
-                "Verified and publisher-reported source context (JSON):\n"
-                + json.dumps(context, sort_keys=True, ensure_ascii=False)
-                + "\n\nAnswer the exact question. Cover every requested dimension. Do not replace missing "
-                "evidence with unrelated metrics. Distinguish observed data, publisher-reported claims and "
-                "analytical judgement. Cite supplied source names inline."
-            }]}],
-            "generationConfig": {"temperature": 0.15, "maxOutputTokens": 1800},
-        }
-        timeout = httpx.Timeout(75.0, connect=10.0)
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(
-                    f"{GEMINI_API_BASE}/models/{model}:generateContent",
-                    params={"key": gemini_key},
-                    headers={"Content-Type": "application/json"},
-                    json=payload,
-                )
-                response.raise_for_status()
-                result = response.json()
-            parts = result["candidates"][0]["content"]["parts"]
-            content = "\n".join(
-                part["text"] for part in parts
-                if isinstance(part, dict) and isinstance(part.get("text"), str)
-            ).strip()
-            if not content:
-                raise ValueError("Gemini returned an empty analysis.")
-            return content, {
-                "status": "completed", "provider": "google_gemini",
-                "model": model, "usage": result.get("usageMetadata"),
-            }
-        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
-            gemini_error = str(exc)[:240]
-            if not near_key:
-                return None, {
-                    "status": "unavailable_fallback_used", "provider": "google_gemini",
-                    "model": model, "error": gemini_error,
-                }
-    else:
-        gemini_error = None
-
-    if not near_key:
+    if not gemini_key:
         return None, {
             "status": "not_configured", "provider": "google_gemini",
-            "model": GEMINI_DEFAULT_MODEL,
-            **({"error": gemini_error} if gemini_error else {}),
+            "model": model, "error": "GEMINI_API_KEY is missing or empty.",
         }
 
-    base_url = os.getenv("NEAR_AI_BASE_URL", "https://cloud-api.near.ai/v1").rstrip("/")
-    model = os.getenv("NEAR_AI_MODEL", NEAR_AI_DEFAULT_MODEL)
     payload = {
-        "model": model, "temperature": 0.15, "max_tokens": 1500,
-        "messages": [
-            {"role": "system", "content":
-                "You are MERIDIAN's blockchain research analyst. Use only supplied context. "
-                "Never invent metrics or sources. Answer the exact question and state evidence gaps clearly."
-            },
-            {"role": "user", "content":
-                "Customer's exact research question: " + topic + "\n\n"
-                "Verified and publisher-reported source context (JSON):\n"
-                + json.dumps(context, sort_keys=True, ensure_ascii=False)
-                + "\n\nAnswer the exact question. Cover each requested dimension and distinguish measured "
-                "data, publisher-reported claims and analytical judgement."
-            },
-        ],
+        "system_instruction": {"parts": [{"text":
+            "You are MERIDIAN's blockchain research analyst. Use only supplied research context. "
+            "Never invent metrics, projects, capabilities, events or sources. Separate measured data, "
+            "publisher claims and analysis. Answer the exact question and cover each requested dimension. "
+            "NEAR Protocol means the NEAR blockchain, not DeFi protocols. State clearly when evidence is missing."
+        }]},
+        "contents": [{"role": "user", "parts": [{"text":
+            "Customer's exact research question: " + topic + "\\n\\n"
+            "Verified and publisher-reported source context (JSON):\\n"
+            + json.dumps(context, sort_keys=True, ensure_ascii=False)
+            + "\\n\\nAnswer the exact question. Cover every requested dimension. Do not replace missing "
+            "evidence with unrelated metrics. Distinguish observed data, publisher-reported claims and "
+            "analytical judgement. Cite supplied source names inline."
+        }]}],
+        "generationConfig": {"temperature": 0.15, "maxOutputTokens": 1800},
     }
     timeout = httpx.Timeout(75.0, connect=10.0)
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
-                base_url + "/chat/completions",
-                headers={"Authorization": "Bearer " + near_key, "Content-Type": "application/json"},
+                f"{GEMINI_API_BASE}/models/{model}:generateContent",
+                params={"key": gemini_key},
+                headers={"Content-Type": "application/json"},
                 json=payload,
             )
             response.raise_for_status()
             result = response.json()
-        content = result["choices"][0]["message"]["content"]
-        if not isinstance(content, str) or not content.strip():
-            raise ValueError("NEAR AI Cloud returned an empty analysis.")
-        return content.strip(), {
-            "status": "completed", "provider": "near_ai_cloud",
-            "model": result.get("model", model), "usage": result.get("usage"),
+        parts = result["candidates"][0]["content"]["parts"]
+        content = "\\n".join(
+            part["text"] for part in parts
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        ).strip()
+        if not content:
+            raise ValueError("Gemini returned an empty analysis.")
+        return content, {
+            "status": "completed", "provider": "google_gemini",
+            "model": model, "usage": result.get("usageMetadata"),
         }
-    except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        try:
+            error_payload = exc.response.json()
+            message = ((error_payload.get("error") or {}).get("message") or "").strip()
+        except (ValueError, TypeError, AttributeError):
+            message = ""
+        safe_message = message[:180] if message else "Google rejected the Gemini request."
         return None, {
-            "status": "unavailable_fallback_used", "provider": "near_ai_cloud",
-            "model": model, "error": str(exc)[:240],
+            "status": "unavailable_fallback_used", "provider": "google_gemini",
+            "model": model, "error": f"Gemini API returned HTTP {status_code}: {safe_message}",
+        }
+    except httpx.RequestError as exc:
+        return None, {
+            "status": "unavailable_fallback_used", "provider": "google_gemini",
+            "model": model, "error": f"Gemini network request failed ({type(exc).__name__}).",
+        }
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        return None, {
+            "status": "unavailable_fallback_used", "provider": "google_gemini",
+            "model": model, "error": f"Gemini response could not be parsed ({type(exc).__name__}).",
         }
 
 async def generate_live_report(
