@@ -397,12 +397,12 @@ function Economics({ label, value }: { label: string; value: string }) {
 }
 
 function inlineMarkdown(value: string): ReactNode[] {
-  const parts = value.split(/(\\*\\*[^*]+\\*\\*|\\[[^\\]]+\\]\\([^)]+\\)|`[^`]+`)/g);
+  const parts = value.split(/(\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\)|`[^`]+`)/g);
   return parts.map((part, index) => {
     if (part.startsWith("**") && part.endsWith("**")) {
       return <strong key={index}>{part.slice(2, -2)}</strong>;
     }
-    const link = part.match(/^\\[([^\\]]+)\\]\\((https?:\\/\\/[^)]+)\\)$/);
+    const link = part.match(/^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/);
     if (link) {
       return <a key={index} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>;
     }
@@ -414,7 +414,7 @@ function inlineMarkdown(value: string): ReactNode[] {
 }
 
 function MarkdownView({ markdown }: { markdown: string }) {
-  const lines = markdown.split(/\\r?\\n/);
+  const lines = markdown.split(/\r?\n/);
   const blocks: ReactNode[] = [];
   let index = 0;
   while (index < lines.length) {
@@ -422,7 +422,7 @@ function MarkdownView({ markdown }: { markdown: string }) {
     if (!line) { index += 1; continue; }
     if (line.startsWith("# ")) { index += 1; continue; }
     if (/^---+$/.test(line)) { blocks.push(<hr key={index} />); index += 1; continue; }
-    const heading = line.match(/^(#{2,4})\\s+(.+)$/);
+    const heading = line.match(/^(#{2,4})\s+(.+)$/);
     if (heading) {
       const level = heading[1].length;
       const content = inlineMarkdown(heading[2]);
@@ -439,8 +439,8 @@ function MarkdownView({ markdown }: { markdown: string }) {
       blocks.push(<blockquote key={index}>{quote.map((item, i) => <p key={i}>{inlineMarkdown(item)}</p>)}</blockquote>);
       continue;
     }
-    if (line.startsWith("|") && index + 1 < lines.length && /^\\|?\\s*:?-{3,}/.test(lines[index + 1].trim())) {
-      const cells = (value: string) => value.trim().replace(/^\\|/, "").replace(/\\|$/, "").split("|").map((cell) => cell.trim());
+    if (line.startsWith("|") && index + 1 < lines.length && /^\|?\s*:?-{3,}/.test(lines[index + 1].trim())) {
+      const cells = (value: string) => value.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
       const header = cells(lines[index]);
       index += 2;
       const rows: string[][] = [];
@@ -458,19 +458,19 @@ function MarkdownView({ markdown }: { markdown: string }) {
       );
       continue;
     }
-    if (/^[-*]\\s+/.test(line)) {
+    if (/^[-*]\s+/.test(line)) {
       const items: string[] = [];
-      while (index < lines.length && /^\\s*[-*]\\s+/.test(lines[index])) {
-        items.push(lines[index].trim().replace(/^[-*]\\s+/, ""));
+      while (index < lines.length && /^\s*[-*]\s+/.test(lines[index])) {
+        items.push(lines[index].trim().replace(/^[-*]\s+/, ""));
         index += 1;
       }
       blocks.push(<ul key={index}>{items.map((item, i) => <li key={i}>{inlineMarkdown(item)}</li>)}</ul>);
       continue;
     }
-    if (/^\\d+\\.\\s+/.test(line)) {
+    if (/^\d+\.\s+/.test(line)) {
       const items: string[] = [];
-      while (index < lines.length && /^\\s*\\d+\\.\\s+/.test(lines[index])) {
-        items.push(lines[index].trim().replace(/^\\d+\\.\\s+/, ""));
+      while (index < lines.length && /^\s*\d+\.\s+/.test(lines[index])) {
+        items.push(lines[index].trim().replace(/^\d+\.\s+/, ""));
         index += 1;
       }
       blocks.push(<ol key={index}>{items.map((item, i) => <li key={i}>{inlineMarkdown(item)}</li>)}</ol>);
@@ -478,7 +478,7 @@ function MarkdownView({ markdown }: { markdown: string }) {
     }
     const paragraph = [line];
     index += 1;
-    while (index < lines.length && lines[index].trim() && !/^(#{1,4}\\s|>|[-*]\\s|\\d+\\.\\s|\\|)/.test(lines[index].trim()) && !/^---+$/.test(lines[index].trim())) {
+    while (index < lines.length && lines[index].trim() && !/^(#{1,4}\s|>|[-*]\s|\d+\.\s|\|)/.test(lines[index].trim()) && !/^---+$/.test(lines[index].trim())) {
       paragraph.push(lines[index].trim());
       index += 1;
     }
