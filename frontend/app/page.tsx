@@ -14,6 +14,7 @@ type DashboardData = {
   payments_enabled: boolean;
   mainnet_execution_enabled: boolean;
   data_mode: string;
+  research_mode: string;
 };
 
 type Order = {
@@ -179,7 +180,7 @@ export default function Home() {
 
         <div className="status-strip">
           <div className="status-title"><span className="status-dot" /> SYSTEM STATUS</div>
-          <div className="status-item">Research engine <strong>Demo provider</strong></div>
+          <div className="status-item">Research engine <strong>{dashboard?.research_mode === "live" ? "Live data" : "Synthetic demo"}</strong></div>
           <div className="status-item">Payments <strong className="off">Disabled</strong></div>
           <div className="status-item">Mainnet execution <strong className="off">Disabled</strong></div>
           <div className="status-item">Safety gate <strong className="on">Active</strong></div>
