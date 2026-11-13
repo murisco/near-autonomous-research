@@ -14,7 +14,7 @@ from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
 
 NEP413_TAG = (1 << 31) + 413
-ACCOUNT_ID_RE = re.compile(r"^[a-z0-9._-]{2,64}$")
+ACCOUNT_ID_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 
 
 def auth_recipient() -> str:
@@ -65,6 +65,8 @@ def verify_nep413_signature(
     signature_b64: str,
 ) -> bool:
     try:
+        if len(message.encode("utf-8")) > 65_536:
+            return False
         if not public_key.startswith("ed25519:"):
             return False
         key_bytes = base58.b58decode(public_key.split(":", 1)[1])
