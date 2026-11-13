@@ -411,7 +411,7 @@ async def generate_live_report(
         "near_agent_projects_github": projects,
     }
     ai_analysis, ai_meta = await generate_near_ai_analysis(topic, research_context)
-    data_mode = "near_ai_live" if ai_analysis else "defillama_live"
+    data_mode = "near_ai_live" if ai_analysis else "multi_source_live"
 
     chain = chain_context["chain"]
     retrieved = datetime.now(timezone.utc).isoformat()
@@ -441,8 +441,6 @@ async def generate_live_report(
     if stablecoins.get("status") != "available":
         quality_warnings.append("Independent chain stablecoin supply was unavailable.")
     quality_warnings.extend(stablecoins.get("quality_warnings") or [])
-    if (chain_context.get("tvl_anomaly_checks") or {}).get("warnings"):
-        quality_warnings.extend(chain_context["tvl_anomaly_checks"]["warnings"])
     if not official.get("near_intents_documented_facts"):
         quality_warnings.append("Official NEAR Intents documentation could not be retrieved during this run.")
     if ai_status != "completed":
