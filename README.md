@@ -10,6 +10,7 @@ A customer submits a blockchain research question. MERIDIAN gathers public data,
 - Retrieves chain TVL and historical TVL from DefiLlama.
 - Filters protocol rows using DefiLlama's chain-TVL methodology: bridge and liquid-staking rows, CEX categories, flagged double-counts, and protocol values inconsistent with total chain TVL are excluded and listed in the report.
 - Calculates historical percentage changes using timestamp windows rather than assuming every data row is exactly one day apart.
+- Retrieves NEAR stablecoin supply, history and token-level chain circulation through DefiLlama. It validates that each response contains usable NEAR data and falls back to `stablecoins.llama.fi` when the primary API host does not serve those routes.
 - Retrieves daily NEAR transaction and address statistics from the NearBlocks API when the public endpoints return a recognised response. NearBlocks is credited in the report.
 - Reads NEAR's official Research & Analytics hub, NEAR AI Cloud documentation, and NEAR Intents documentation. Publisher-displayed metrics are explicitly separated from independently queried data.
 - Reports the official NEAR Intents homepage's volume headline as publisher-reported, not independently reconstructed. Transaction-level Intents Explorer data is marked unavailable unless a partner JWT is configured.
@@ -27,6 +28,7 @@ A customer submits a blockchain research question. MERIDIAN gathers public data,
 - Historical deltas use timestamp windows and the actual latest historical observation date.
 - NearBlocks, NEAR's own analytics hub and NEAR Intents homepage are clearly attributed. Publisher headlines are not silently treated as independent measurements.
 - Missing or unrecognised metrics are labelled unavailable; the app does not fill gaps with invented data.
+- Stablecoin source checks validate response shape and exact chain coverage. CI also runs a live smoke check against the primary and compatibility hosts, so an HTTP 200 with empty or wrong-chain data cannot silently pass.
 
 ## What is not live
 
@@ -101,7 +103,7 @@ python -m compileall -q backend
 pytest -q
 ```
 
-The test suite covers deterministic demo orders, policy enforcement, audit events, quote-preview safety, DefiLlama category exclusions, protocol outliers, date-based historical change calculations, and publisher-metric labelling.
+The backend CI compiles the application, runs the backend tests, and smoke-checks the live DefiLlama NEAR stablecoin endpoints. Tests cover deterministic demo orders, policy enforcement, audit events, quote-preview safety, DefiLlama category exclusions, protocol outliers, stablecoin host fallback and payload validation, date-based historical change calculations, and publisher-metric labelling. Frontend CI builds the Next.js dashboard.
 
 ## Judge walkthrough
 
@@ -110,7 +112,7 @@ The test suite covers deterministic demo orders, policy enforcement, audit event
 3. Review the chain TVL snapshot, filtered protocol table, excluded rows and data-quality warnings.
 4. Review NEAR activity metrics where NearBlocks returns a recognised daily series.
 5. Review official NEAR AI and NEAR Intents documentation facts, and distinguish them from publisher-displayed headline metrics.
-6. Inspect the Tidepool dry-quote preview and the audit ledger.
+6. Inspect the Tidepool dry-quote preview (when available) and the audit ledger. The dashboard displays the returned quote preview alongside the report; it never creates a deposit address or marks the order paid.
 7. Confirm that revenue received remains zero and no transfer or payout is shown as completed.
 
 ## Hackathon submission
