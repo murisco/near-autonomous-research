@@ -396,7 +396,11 @@ async def generate_live_report(
 
     stablecoins = stablecoin_result if isinstance(stablecoin_result, dict) else {
         "status": "unavailable", "chain": default_chain, "assets": [],
-        "reason": "Stablecoin source request failed.", "sources": ["https://stablecoins.llama.fi/"],
+        "reason": "Stablecoin source request failed.", "sources": [
+            "https://api.llama.fi/stablecoincharts/" + default_chain,
+            "https://api.llama.fi/stablecoins?includePrices=true",
+            "https://api.llama.fi/stablecoinchains",
+        ],
     }
     projects = projects_result if isinstance(projects_result, dict) else {
         "status": "unavailable", "projects": [], "autonomous_ai_agent_candidates": [],
@@ -518,7 +522,7 @@ DefiLlama's chain-TVL methodology excludes bridge TVL and liquid-staking TVL fro
 
 NearBlocks data is a third-party indexed source. Its public API documentation identifies daily transaction and address statistics endpoints; MERIDIAN reports only numeric fields it can recognise in the response. NearBlocks attribution: Powered by NearBlocks.io APIs.
 
-## 3. Stablecoin liquidity
+## 3. Stablecoin supply and DEX liquidity
 {_stablecoin_summary(stablecoins)}
 
 DefiLlama stablecoin supply is a supply measure, not a direct measure of accessible DEX depth, transfers, trading volume, or organic demand. The token-level list depends on the provider's chain mapping and stablecoin catalogue.
