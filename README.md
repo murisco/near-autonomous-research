@@ -2,54 +2,76 @@
 
 MERIDIAN is an AI-native research business built for the **NEAR Hackathon 2026 — Autonomous Business track**.
 
-It turns a customer's blockchain research question into a priced research report, applies human-defined operating rules, tracks the cost and projected economics of fulfilling the order, and records the business activity in an auditable ledger.
+A customer submits a blockchain research question. MERIDIAN gathers public data, checks source methodology, produces an evidence-led report, estimates delivery costs, and records the order and business decisions in an audit ledger.
 
-The product is designed around the hackathon's one-agent research-shop brief: sell reports, purchase its own inference, obey configurable limits, and distribute a fixed share of revenue to contributors. The current deployed prototype implements the research and business-control loop; payment settlement and automated token payouts remain disabled until their testnet flow and wallet custody are configured.
+## What the current build does
 
-## What works in this build
+- Accepts a priced research order and applies minimum-price, daily-budget, kill-switch and revenue-split rules.
+- Retrieves chain TVL and historical TVL from DefiLlama.
+- Filters protocol rows using DefiLlama's chain-TVL methodology: bridge and liquid-staking rows, CEX categories, flagged double-counts, and protocol values inconsistent with total chain TVL are excluded and listed in the report.
+- Calculates historical percentage changes using timestamp windows rather than assuming every data row is exactly one day apart.
+- Retrieves daily NEAR transaction and address statistics from the NearBlocks API when the public endpoints return a recognised response. NearBlocks is credited in the report.
+- Reads NEAR's official Research & Analytics hub, NEAR AI Cloud documentation, and NEAR Intents documentation. Publisher-displayed metrics are explicitly separated from independently queried data.
+- Reports the official NEAR Intents homepage's volume headline as publisher-reported, not independently reconstructed. Transaction-level Intents Explorer data is marked unavailable unless a partner JWT is configured.
+- Optionally analyses the complete source context through NEAR AI Cloud when `NEAR_AI_API_KEY` is configured. Without the key, MERIDIAN creates a deterministic source summary and clearly says AI Cloud inference did not run.
+- Tracks estimated inference costs, quoted sales, projected profit and operator/contributor shares.
+- Records research source metadata, exclusions, payment previews and accounting decisions in an off-chain audit ledger.
+- Persists records in Railway PostgreSQL; SQLite is available for local development.
 
-- Customer research order intake with a report price.
-- Server-side policy checks for minimum report price, daily inference budget, kill switch, and revenue split.
-- **Live NEAR chain TVL and protocol research** from DefiLlama by default. The report includes source URLs, retrieval time, chain TVL, historical movement, protocol-level data when available, and explicit methodology caveats.
-- Optional **NEAR AI Cloud** analysis of the collected source data when `NEAR_AI_API_KEY` is configured. Without the key, MERIDIAN still produces a source-backed deterministic report and does not pretend AI Cloud inference ran.
-- Projected inference cost, profit, and operator/contributor allocation.
-- An off-chain audit ledger covering orders, policy approval, research, source records, payment-quote status, and projected accounting.
-- A dashboard showing orders, reports, business metrics, operating rules, and the audit trail.
-- PostgreSQL persistence in the Railway deployment; SQLite for local development.
+## Data-quality rules
 
-## What is not live yet
+- Chain TVL is not a measure of users, transactions, fees, or protocol revenue.
+- DefiLlama excludes bridge TVL and liquid-staking TVL from chain TVL by default. CEX assets are not chain DeFi TVL.
+- Protocol-level figures may overlap. MERIDIAN never adds protocol rows together as though they were a verified chain total.
+- A protocol row is excluded if its reported chain-specific TVL exceeds chain TVL by more than 5%, or if DefiLlama marks it double-counted.
+- Historical deltas use timestamp windows and the actual latest historical observation date.
+- NearBlocks, NEAR's own analytics hub and NEAR Intents homepage are clearly attributed. Publisher headlines are not silently treated as independent measurements.
+- Missing or unrecognised metrics are labelled unavailable; the app does not fill gaps with invented data.
 
-- Customer payment collection or settlement through NEAR Intents (only the community Tidepool dry-quote endpoint is called).
+## What is not live
+
+- Customer payment collection or settlement through NEAR Intents.
 - Automated contributor payouts.
 - OutLayer custody wallet creation and policy configuration.
 - On-chain audit anchoring.
 
-The current payment event is labelled **simulation only**. It is not a payment, deposit address, settlement, or completed transfer. Revenue received stays at zero until a verified payment status is connected. Payout shares are projections, not transfers. Mainnet execution remains disabled.
+The payment preview is a **Tidepool community-sandbox dry quote** only. It is not an official NEAR or Defuse testnet, does not create a deposit address, does not move funds, and does not mean customer payment was received. The official NEAR Intents 1Click API has no testnet version. Mainnet execution and payment collection remain disabled.
 
-NEAR Intents' production 1Click API is mainnet-only. A community-operated NEAR testnet sandbox named Tidepool offers a 1Click-compatible test environment, but it is **not affiliated with NEAR or Defuse** and its deposit-address keys are operated by its maker. It is suitable only for valueless test tokens and must never receive real assets. MERIDIAN does not yet claim Tidepool or OutLayer integration.
+Revenue received stays at zero until a verified payment status is connected. Payout shares are projections, not transfers.
+
+## Optional environment variables
+
+Set these only in Railway's service variables or a local untracked `.env` file. Never commit secrets.
+
+- `NEAR_AI_API_KEY`: enables NEAR AI Cloud evidence synthesis.
+- `NEAR_AI_BASE_URL`: defaults to `https://cloud-api.near.ai/v1`.
+- `NEAR_AI_MODEL`: defaults to `zai-org/GLM-5.1-FP8`, following the current NEAR AI Cloud quickstart example.
+- `NEARBLOCKS_API_KEY`: optional bearer key for higher NearBlocks API limits.
+- `NEAR_INTENTS_EXPLORER_JWT`: partner JWT needed for transaction-level 1Click Explorer analytics. The current code does not claim explorer metrics without querying the API.
+
+See `.env.example` for the full list. Do not paste keys into GitHub issues or chat.
 
 ## Business rules
 
 Edit `config/business-rules.yaml`:
 
-- `limits.max_inference_spend_per_day`: maximum inference budget per day.
+- `limits.max_inference_spend_per_day`: maximum estimated inference budget per day.
 - `limits.minimum_report_price`: lowest accepted report price.
 - `revenue_split.operator_percent` and `contributors_percent`: percentages that must total 100.
 - `safety.kill_switch`: pauses new orders when true.
-- `safety.payments_enabled`: remains false in this build.
-- `safety.mainnet_execution_enabled`: remains false in this build.
+- `safety.payments_enabled`: remains false.
+- `safety.mainnet_execution_enabled`: remains false.
 - `safety.require_human_approval_for_payouts`: requires operator oversight before payouts.
-
-The current demo policy is illustrative. Review it before any real operation.
 
 ## Architecture
 
-- **Dashboard:** Next.js customer research desk and business control room.
-- **Business API:** FastAPI order lifecycle, policy checks, report orchestration, accounting, and ledger API.
-- **Research provider:** DefiLlama public chain and protocol data; optional NEAR AI Cloud analysis.
-- **Treasury logic:** tracks spend estimates, report price, projected profit, and revenue splits.
+- **Dashboard:** Next.js research desk and business control room.
+- **Business API:** FastAPI order lifecycle, policy checks, research orchestration, accounting and ledger API.
+- **Research sources:** DefiLlama, NearBlocks, NEAR official research hub, NEAR AI Cloud documentation and NEAR Intents documentation.
+- **AI analysis:** optional NEAR AI Cloud OpenAI-compatible inference over the gathered source context.
+- **Treasury logic:** estimates inference cost, report price, projected profit and revenue shares.
 - **Database:** SQLAlchemy with PostgreSQL on Railway.
-- **Payment and custody adapters:** planned for a testnet-only NEAR Intents/Tidepool and OutLayer flow; not yet active.
+- **Payments:** Tidepool community dry-quote adapter only; real NEAR Intents payment settlement and custody are not active.
 
 ## Run locally
 
@@ -70,19 +92,7 @@ npm install
 BACKEND_URL=http://localhost:8000 npm run dev
 ```
 
-Open `http://localhost:3000`. The Next.js API proxy forwards requests to the backend using the server-side `BACKEND_URL`.
-
-### Optional NEAR AI Cloud analysis
-
-Set these in the backend environment (never commit secrets):
-
-```bash
-NEAR_AI_API_KEY=your_key
-NEAR_AI_BASE_URL=https://cloud-api.near.ai/v1
-NEAR_AI_MODEL=Qwen/Qwen3.8-27B
-```
-
-NEAR AI Cloud is OpenAI-compatible. The application sends source data to the selected model for analysis. Do not claim that the call occurred unless the report's metadata says `near_ai_live`.
+Open `http://localhost:3000`.
 
 ## Tests
 
@@ -91,14 +101,17 @@ python -m compileall -q backend
 pytest -q
 ```
 
+The test suite covers deterministic demo orders, policy enforcement, audit events, quote-preview safety, DefiLlama category exclusions, protocol outliers, date-based historical change calculations, and publisher-metric labelling.
+
 ## Judge walkthrough
 
-1. Open the deployed Railway dashboard.
-2. Submit a specific NEAR ecosystem research question with a quote of at least the configured minimum.
-3. Open the generated report and inspect the live-source label, source links, retrieval time, and methodology notes.
-4. Review the business performance panel for the report quote, estimated compute cost, projected profit, and configured revenue split.
-5. Inspect the Tidepool dry quote preview, then open the audit ledger to review the order, policy, research, source, quote and accounting events.
-6. Confirm that revenue received is still zero and that payment collection, payouts, and mainnet execution are not falsely presented as complete.
+1. Open the Railway dashboard.
+2. Submit a research question with a quote at or above the configured minimum.
+3. Review the chain TVL snapshot, filtered protocol table, excluded rows and data-quality warnings.
+4. Review NEAR activity metrics where NearBlocks returns a recognised daily series.
+5. Review official NEAR AI and NEAR Intents documentation facts, and distinguish them from publisher-displayed headline metrics.
+6. Inspect the Tidepool dry-quote preview and the audit ledger.
+7. Confirm that revenue received remains zero and no transfer or payout is shown as completed.
 
 ## Hackathon submission
 
@@ -107,4 +120,4 @@ pytest -q
 - Public repository: https://github.com/murisco/near-autonomous-research
 - Demo hosting: https://meridian-dashboard.up.railway.app
 
-A working public prototype and an honest explanation of the currently disabled payment/payout steps are intentional. The project does not claim unimplemented on-chain behavior.
+MERIDIAN is explicit about the difference between live public data, publisher-reported metrics, AI analysis, quote previews, and actual onchain settlement.
