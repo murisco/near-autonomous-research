@@ -2,44 +2,72 @@
 
 ## Services
 
-1. **Dashboard** — Next.js customer research desk, order history and operator control room.
-2. **Business API** — FastAPI order lifecycle, server-side policy checks, report orchestration and accounting.
-3. **Research provider** — DefiLlama public chain and protocol endpoints for live TVL snapshots; optional NEAR AI Cloud analysis of collected source data.
-4. **Treasury/accounting module** — estimated inference reserves, report pricing, projected profit, operator/contributor allocation and daily budget enforcement.
-5. **Audit ledger** — off-chain PostgreSQL records for orders, decisions, source metadata, quote previews and accounting entries.
-6. **NEAR payment/custody adapters** — planned; payments, transfers and payouts remain disabled until a wallet, test environment and owner-approved policy are configured.
+1. **Dashboard** — Next.js customer research desk, order history and business control room.
+2. **Business API** — FastAPI order lifecycle, policy checks, report orchestration, accounting and ledger API.
+3. **Research source layer** — DefiLlama chain TVL and protocol data; NearBlocks daily transaction/address statistics; NEAR official Research & Analytics hub; NEAR AI Cloud docs; NEAR Intents docs and publisher homepage.
+4. **AI synthesis** — Optional NEAR AI Cloud OpenAI-compatible API call over collected evidence. A model's privacy tier is reported as model-dependent.
+5. **Treasury/accounting module** — estimated inference reserve, report quote, projected profit and operator/contributor allocation.
+6. **Audit ledger** — off-chain PostgreSQL records for orders, policy decisions, sources, quote previews, and accounting entries.
+7. **Payment adapter** — Tidepool community sandbox dry quote only. No deposit address, transaction, or settlement.
 
 ## Current order lifecycle
 
 `requested → policy_approved → researching → report_ready_unpaid`
 
-The customer research-order path uses live source-backed data by default. The separate `POST /api/demo/run` route deliberately remains synthetic and deterministic for CI and judge walkthroughs.
+The customer research-order path uses live source-backed research by default. The separate `POST /api/demo/run` route remains synthetic and deterministic for CI and judge walkthroughs.
+
+## Research pipeline
+
+### DefiLlama
+
+- Query the chain catalogue first and resolve the chain from the request.
+- Fetch historical TVL for that exact selected chain, not a hard-coded default chain.
+- Compute 7-day and 30-day deltas using timestamp windows, not array offsets.
+- Apply category filters consistent with DefiLlama's methodology. Bridge and liquid-staking TVL are not attributed to chain TVL by default. CEX categories and double-counted rows are excluded.
+- Exclude a protocol when its reported chain-specific value exceeds chain-wide TVL by more than 5%.
+- Report excluded rows and warnings transparently. Individual protocol values are not added to create a chain total because they may overlap.
+
+### NearBlocks
+
+The research layer requests the daily transaction-statistics and address-statistics endpoints, recognises documented data fields, and summarises the returned dates. If the API fails or its response shape is not recognised, the relevant metric is labelled unavailable. Reports attribute NearBlocks.
+
+### Official NEAR sources
+
+MERIDIAN retrieves official NEAR research hub and product documentation. Publisher-reported headline metrics remain labelled as such. NEAR Intents transaction-level Explorer data requires a partner JWT; no transaction-level volume or swap counts are claimed without querying the authenticated endpoint.
+
+### NEAR AI Cloud
+
+AI synthesis runs only when `NEAR_AI_API_KEY` is configured. The default model is the model shown in the current NEAR AI Cloud quickstart. Without a key or on API failure, MERIDIAN uses a limited deterministic summary and records that AI analysis did not run.
 
 ## Data provenance
 
-Each report stores a data mode and audit metadata. `defillama_live` means public DefiLlama chain/protocol data was retrieved; it does not mean NEAR AI Cloud ran. `near_ai_live` means the configured NEAR AI Cloud model generated an analysis over the retrieved data. `synthetic_demo` is generated sample content and must never be described as live research.
+- `defillama_live` means DefiLlama chain/protocol data was retrieved.
+- `near_ai_live` means a configured NEAR AI Cloud model generated the analysis over the gathered research context.
+- `synthetic_demo` is generated sample content and must never be described as live research.
+- Publisher-displayed statistics are explicitly distinguished from independently queried data.
+- Every report includes source URLs, retrieval time and methodology caveats.
 
-Every report states its source URLs, retrieval timestamp and methodology caveats. TVL is not a proxy for users, transactions, fees or protocol revenue.
+TVL is not a proxy for users, transactions, fees or protocol revenue.
 
 ## Business controls
 
-- Enforce the minimum report price before research starts.
-- Check daily estimated inference reserve against the configured cap.
+- Enforce minimum report price before research starts.
+- Check estimated daily inference reserve against the configured cap.
 - Stop new jobs when the kill switch is enabled.
 - Validate that operator and contributor revenue shares total 100%.
-- Keep payment collection, wallet signing, contributor payout and mainnet execution disabled by default.
+- Keep payment collection, wallet signing, payouts and mainnet execution disabled by default.
 - Treat unpaid order values as quotes, not collected revenue.
 - Require explicit owner approval for irreversible transfers and payouts.
 - Keep wallet/API keys outside source control and plaintext application data.
 
-## NEAR integrations and boundaries
+## NEAR integration boundaries
 
-NEAR AI Cloud uses an OpenAI-compatible API. The current adapter is optional and runs only when `NEAR_AI_API_KEY` is configured. Without a key, MERIDIAN produces a source-backed deterministic report and records that no NEAR AI model inference ran.
+NEAR AI Cloud provides an OpenAI-compatible inference API. Its published model catalogue distinguishes Confidential TEE, third-party Confidential TEE, and Incognito model classes; privacy and verification guarantees depend on the chosen model.
 
-NEAR Intents production 1Click is mainnet-only according to its official documentation. Tidepool provides a community-operated, 1Click-compatible NEAR testnet sandbox using valueless test tokens; it is not affiliated with NEAR, Defuse or 1Click. It may be used for isolated testnet experiments, but must not be represented as the official NEAR Intents testnet. OutLayer's testnet wallet APIs support account and direct NEAR operations, but its documentation says its Intents-dependent endpoints return HTTP 503 on testnet. These products therefore do not yet provide MERIDIAN with a single official end-to-end testnet path for Intents payments and payouts.
+The official NEAR Intents 1Click quickstart states there is no testnet version. Tidepool is a community-operated sandbox and must not be represented as official NEAR or Defuse infrastructure. MERIDIAN's Tidepool adapter uses dry mode only; it does not create a deposit address or transfer funds.
 
-Live research orders may request a Tidepool dry quote for a WNEAR-to-USDC route. The response is labelled as a community sandbox quote, its signature is not treated as verified, and the dry flag prevents a deposit address from being returned. No transfer is initiated. If the sandbox is unavailable, the system records a simulation fallback. This does not represent official NEAR Intents testnet or production settlement.
+Production NEAR Intents settlement, wallet custody, refund handling, contributor payouts and onchain audit anchoring remain unimplemented and disabled.
 
 ## Persistence and auditability
 
-PostgreSQL persists orders, reports, estimated costs and audit events. The ledger is currently off-chain. A future public/onchain ledger anchor must omit customer email and private data, and only use verified transaction references after actual settlement.
+PostgreSQL persists orders, reports, estimated costs and audit events. The ledger is currently off-chain. A future public/onchain ledger anchor must omit customer email and other private data, and must only use verified transaction references after actual settlement.
