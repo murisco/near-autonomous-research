@@ -293,7 +293,7 @@ export default function Home() {
                 events.map((event) => (
                   <div className="ledger-row" key={event.id}>
                     <div className="ledger-marker" />
-                    <div className="ledger-main"><strong>{event.event_type.replaceAll("_", " ")}</strong><span>{event.order_id ? "Order " + event.order_id.slice(0, 8) : "System event"}</span></div>
+                    <div className="ledger-main"><strong>{event.event_type.replaceAll("_", " ")}</strong><span>{event.order_id ? "Order " + event.order_id.slice(0, 8) : "System event"}</span><details className="ledger-event-details"><summary>Inspect event data</summary><pre>{JSON.stringify(event.details, null, 2)}</pre></details></div>
                     <time>{prettyDate(event.created_at)}</time>
                   </div>
                 ))}
