@@ -5,6 +5,7 @@ class OrderCreate(BaseModel):
     topic: str = Field(min_length=8, max_length=500)
     price_usd: float = Field(default=10.0, gt=0, le=10000)
     buyer_email: str | None = Field(default=None, max_length=320)
+    buyer_account_id: str | None = Field(default=None, max_length=128)
 
     @field_validator("topic")
     @classmethod
