@@ -205,24 +205,28 @@ def analyse_tvl_history(current_tvl: float, history: list[dict], days: int = 30)
 
 
 def select_chain_from_topic(topic: str, chain_names: list[str], default_chain: str = "Near") -> str | None:
-    """Select the requested chain without treating a negated comparison as the target."""
+    """Choose a positively requested chain; ignore names explicitly negated by the prompt."""
     topic_text = topic or ""
-    mentioned = [
-        name for name in chain_names
-        if re.search(
-            r"(?<![A-Za-z0-9])" + re.escape(name) + r"(?![A-Za-z0-9])",
-            topic_text,
-            flags=re.IGNORECASE,
-        )
-    ]
     default_match = next(
         (name for name in chain_names if name.casefold() == default_chain.casefold()),
         None,
     )
-    if default_match and any(name.casefold() == default_match.casefold() for name in mentioned):
-        return default_match
-    if mentioned:
-        return sorted(mentioned, key=len, reverse=True)[0]
+    negation_before = re.compile(
+        r"(?:not|never|exclude(?:d)?|except|rather than|instead of|other than|but not)"
+        r"\s+(?:(?:the|chain)\s+)?$",
+        re.IGNORECASE,
+    )
+    positive = []
+    for name in chain_names:
+        pattern = r"(?<![A-Za-z0-9])" + re.escape(name) + r"(?![A-Za-z0-9])"
+        for match in re.finditer(pattern, topic_text, flags=re.IGNORECASE):
+            prefix = topic_text[max(0, match.start() - 48):match.start()]
+            if negation_before.search(prefix):
+                continue
+            positive.append(name)
+            break
+    if positive:
+        return sorted(positive, key=len, reverse=True)[0]
     return default_match
 
 
@@ -381,36 +385,46 @@ def parse_stablecoin_chain_assets(raw_assets: list[dict], chain: str) -> list[di
     return sorted(asset_rows, key=lambda item: item["current_supply_usd"], reverse=True)
 
 
+def parse_stablecoin_chain_aggregate(rows: list[dict], chain: str) -> float | None:
+    """Read the provider's current chain aggregate without summing token rows."""
+    target = chain.casefold()
+    for row in rows:
+        if not isinstance(row, dict) or str(row.get("name") or "").casefold() != target:
+            continue
+        return _stablecoin_usd_value(
+            row.get("totalCirculatingUSD", row.get("totalCirculatingUsd", row.get("totalCirculating")))
+        )
+    return None
+
+
 async def collect_stablecoin_context(chain: str = "Near") -> dict:
-    """Collect chain-level stablecoin history and per-asset circulating supply from DefiLlama."""
-    headers = {"User-Agent": "MERIDIAN-Autonomous-Research/0.4"}
+    """Collect stablecoin supply with independent endpoint fallbacks and partial-result handling."""
+    headers = {"User-Agent": "MERIDIAN-Autonomous-Research/0.6"}
     timeout = httpx.Timeout(20.0, connect=8.0)
     chart_url = STABLECOINS_BASE + "/stablecoincharts/" + quote(chain, safe="")
     assets_url = STABLECOINS_BASE + "/stablecoins?includePrices=true"
-    try:
-        async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
-            chart_response, assets_response = await asyncio.gather(
-                client.get(chart_url), client.get(assets_url), return_exceptions=True
-            )
-        chart = []
-        assets_payload = {}
-        errors = []
-        if not isinstance(chart_response, Exception):
-            chart_response.raise_for_status()
-            chart = chart_response.json()
-        else:
-            errors.append("chain_history_unavailable")
-        if not isinstance(assets_response, Exception):
-            assets_response.raise_for_status()
-            assets_payload = assets_response.json()
-        else:
-            errors.append("stablecoin_catalogue_unavailable")
-    except (httpx.HTTPError, ValueError, TypeError) as exc:
-        return {
-            "status": "unavailable", "chain": chain, "assets": [],
-            "reason": "DefiLlama stablecoin source failed: " + type(exc).__name__,
-            "sources": [chart_url, assets_url],
-        }
+    chains_url = STABLECOINS_BASE + "/stablecoinchains"
+    errors: list[str] = []
+
+    async def fetch_json(client: httpx.AsyncClient, url: str, label: str):
+        try:
+            response = await client.get(url)
+            if response.status_code >= 400:
+                errors.append(f"{label}_http_{response.status_code}")
+                return None
+            return response.json()
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
+            errors.append(f"{label}_{type(exc).__name__}")
+            return None
+
+    async with httpx.AsyncClient(
+        timeout=timeout, headers=headers, follow_redirects=True
+    ) as client:
+        chart, assets_payload, chain_rows = await asyncio.gather(
+            fetch_json(client, chart_url, "chain_history"),
+            fetch_json(client, assets_url, "stablecoin_catalogue"),
+            fetch_json(client, chains_url, "chain_aggregate"),
+        )
 
     history = []
     if isinstance(chart, list):
@@ -432,44 +446,62 @@ async def collect_stablecoin_context(chain: str = "Near") -> dict:
         raw_assets = assets_payload
     else:
         raw_assets = []
-
     asset_rows = parse_stablecoin_chain_assets(raw_assets, chain)
+    chain_aggregate = parse_stablecoin_chain_aggregate(
+        chain_rows if isinstance(chain_rows, list) else [], chain
+    )
     reconstructed_total = sum(item["current_supply_usd"] for item in asset_rows) if asset_rows else None
     chart_total = latest["tvl"] if latest else None
-    total = chart_total if chart_total is not None else reconstructed_total
-    total_method = (
-        "DefiLlama chain-level stablecoin history" if chart_total is not None
-        else "sum of returned per-asset chainCirculating values; catalogue coverage may be incomplete"
-    )
+
+    if chart_total is not None:
+        total = chart_total
+        total_method = "DefiLlama chain-level stablecoin history"
+    elif chain_aggregate is not None:
+        total = chain_aggregate
+        total_method = "DefiLlama current chain aggregate"
+    elif reconstructed_total is not None:
+        total = reconstructed_total
+        total_method = "sum of returned per-asset chainCirculating values; catalogue coverage may be incomplete"
+    else:
+        total = None
+        total_method = "unavailable"
+
     retrieved = datetime.now(timezone.utc)
     history_for_change = [{"date": row["date"], "tvl": row["tvl"]} for row in history]
     warnings = []
     if not asset_rows:
         warnings.append("Per-stablecoin chain breakdown was unavailable; do not treat the aggregate as a token-level liquidity map.")
     if chart_total is None:
-        warnings.append("Chain-level stablecoin history was unavailable; aggregate uses returned asset rows only or is unavailable.")
+        warnings.append("Chain-level historical stablecoin data was unavailable; current supply uses a fallback source.")
+    if chart_total is None and chain_aggregate is None and reconstructed_total is None:
+        warnings.append("No independent stablecoin supply endpoint returned a usable NEAR value.")
     if chart_total is not None and reconstructed_total is not None and reconstructed_total > 0:
         divergence = (reconstructed_total / chart_total - 1) * 100
         if abs(divergence) > 15:
             warnings.append("Per-asset supply sum differs from chain aggregate by more than 15%; catalogue coverage, aliases, or endpoint timing may differ.")
+    warnings.extend(errors)
+
     return {
         "status": "available" if total is not None or asset_rows else "unavailable",
         "chain": chain,
         "total_supply_usd": round(total, 2) if total is not None else None,
         "total_method": total_method,
         "history_points": len(history),
-        "as_of": datetime.fromtimestamp(latest["date"], timezone.utc).isoformat() if latest else None,
+        "as_of": (
+            datetime.fromtimestamp(latest["date"], timezone.utc).isoformat()
+            if latest else retrieved.isoformat() if total is not None else None
+        ),
         "change_7d_percent": historical_change(history_for_change, 7),
         "change_30d_percent": historical_change(history_for_change, 30),
         "assets": asset_rows[:15],
         "asset_count": len(asset_rows),
         "asset_sum_usd": round(reconstructed_total, 2) if reconstructed_total is not None else None,
-        "quality_warnings": warnings + errors,
+        "chain_aggregate_usd": round(chain_aggregate, 2) if chain_aggregate is not None else None,
+        "quality_warnings": warnings,
         "retrieved_at": retrieved.isoformat(),
-        "sources": [chart_url, assets_url],
+        "sources": [chart_url, assets_url, chains_url],
         "limitations": "Stablecoin supply is not equivalent to available DEX liquidity, trading volume, or user adoption; coverage and classification depend on DefiLlama's stablecoin catalogue.",
     }
-
 
 def _find_rows(payload: Any) -> list[dict]:
     if isinstance(payload, list):
