@@ -1,6 +1,7 @@
 from datetime import datetime, timezone, timedelta
 
 from backend.app.research_sources import (
+    analyse_tvl_history,
     filter_chain_protocols,
     historical_change,
     parse_intents_home,
@@ -111,3 +112,41 @@ def test_intents_home_headline_is_not_mislabelled_as_verified_api_volume():
     assert metric["all_time_volume_displayed"] == "$33B+"
     assert metric["chains_displayed"] == 38
     assert "not independently reconstructed" in metric["classification"]
+
+
+
+def test_activity_summary_excludes_partial_current_utc_day_and_compares_full_windows():
+    today = datetime.now(timezone.utc).date()
+    rows = []
+    for offset in range(14, 0, -1):
+        day = today - timedelta(days=offset)
+        rows.append({"date": day.isoformat(), "txns": 100 + (14 - offset)})
+    rows.append({"date": today.isoformat(), "txns": 999_999})
+
+    result = summarise_daily_rows(rows, ("txns",), "daily transactions")
+
+    assert result["status"] == "available"
+    assert result["latest_day"] == (today - timedelta(days=1)).isoformat()
+    assert result["latest_day_is_complete_utc"] is True
+    assert result["excluded_current_utc_day"] is True
+    assert result["last_7d_days"] == 7
+    assert result["previous_7d_days"] == 7
+    assert result["last_7d_window_complete"] is True
+    assert result["previous_7d_window_complete"] is True
+    assert result["latest_day_value"] != 999_999
+
+
+def test_tvl_anomaly_check_flags_large_daily_move_and_current_history_divergence():
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    history = []
+    for day in range(10):
+        value = 100 if day < 8 else (200 if day == 8 else 210)
+        history.append({"date": int((base + timedelta(days=day)).timestamp()), "tvl": value})
+
+    result = analyse_tvl_history(240, history)
+
+    assert result["status"] == "available"
+    assert result["largest_daily_move"]["change_percent"] == 100.0
+    assert result["current_vs_latest_history_percent"] > 10
+    assert any("single approximately daily TVL move exceeded 25%" in item for item in result["warnings"])
+    assert any("differs from the latest historical observation" in item for item in result["warnings"])
