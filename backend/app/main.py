@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 from datetime import datetime, time, timedelta
@@ -9,7 +10,7 @@ import httpx
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, inspect, select, text
+from sqlalchemy import func, inspect, select, text, update
 from sqlalchemy.orm import Session, joinedload
 
 from .config import load_business_rules
@@ -79,7 +80,7 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> dict:
     if not session:
         raise HTTPException(status_code=401, detail="Your session has expired. Please sign in again.")
     if not session.account_id:
-        raise HTTPException(status_code=401, detail="This legacy email session is no longer valid. Sign in with your NEAR wallet.")
+        raise HTTPException(status_code=401, detail="No NEAR account is attached to this session. Please sign in again.")
     role = "admin" if is_admin_account(session.account_id) else "customer"
     return {"account_id": session.account_id, "role": role}
 
@@ -94,7 +95,7 @@ def require_admin(user: dict = Depends(get_current_user)) -> dict:
 def create_near_login_nonce(db: Session = Depends(get_db)) -> dict:
     now = datetime.utcnow()
     challenge_id = str(uuid4())
-    nonce_b64 = __import__("base64").b64encode(secrets.token_bytes(32)).decode("ascii")
+    nonce_b64 = base64.b64encode(secrets.token_bytes(32)).decode("ascii")
     recipient = auth_recipient()
     expires_at = now + timedelta(minutes=5)
     issued = now.replace(microsecond=0).isoformat() + "Z"
@@ -170,8 +171,19 @@ async def verify_near_login(
             detail="The signing key is not a current full-access key for this NEAR account.",
         )
 
-    # Consume the challenge before creating a session so the same signature cannot be replayed.
-    challenge.consumed_at = now
+    # Atomically consume the challenge so concurrent submissions cannot reuse it.
+    consumed = db.execute(
+        update(NearLoginChallenge)
+        .where(
+            NearLoginChallenge.id == payload.challenge_id,
+            NearLoginChallenge.consumed_at.is_(None),
+            NearLoginChallenge.expires_at > now,
+        )
+        .values(consumed_at=now)
+    )
+    if consumed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="That login request has already been used. Please try again.")
     raw_token = secrets.token_urlsafe(32)
     db.add(
         AuthSession(
