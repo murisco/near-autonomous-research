@@ -515,77 +515,117 @@ def _customer_summary(
 
 
 async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | None, dict]:
-    """Use Gemini only; never silently route research through NEAR AI Cloud."""
-    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-    model = (os.getenv("GEMINI_MODEL") or GEMINI_DEFAULT_MODEL).strip()
+    """Generate research analysis through AgentRouter Responses API with bounded model fallback."""
+    api_key = os.getenv("AGENTROUTER_API_KEY", "").strip()
+    base_url = os.getenv("AGENTROUTER_BASE_URL", "https://agentrouter.org/v1").strip().rstrip("/")
+    primary_model = (os.getenv("AGENTROUTER_MODEL") or "gpt-5.6-sol").strip()
+    fallback_model = (os.getenv("AGENTROUTER_FALLBACK_MODEL") or "gpt-6-astra").strip()
 
-    if not gemini_key:
+    if not api_key:
         return None, {
-            "status": "not_configured", "provider": "google_gemini",
-            "model": model, "error": "GEMINI_API_KEY is missing or empty.",
+            "status": "not_configured", "provider": "agentrouter",
+            "model": primary_model, "error": "AGENTROUTER_API_KEY is missing or empty.",
         }
 
-    payload = {
-        "system_instruction": {"parts": [{"text":
-            "You are MERIDIAN's blockchain research analyst. Use only supplied research context. "
-            "Never invent metrics, projects, capabilities, events or sources. Separate measured data, "
-            "publisher claims and analysis. Answer the exact question and cover each requested dimension. "
-            "NEAR Protocol means the NEAR blockchain, not DeFi protocols. State clearly when evidence is missing."
-        }]},
-        "contents": [{"role": "user", "parts": [{"text":
-            "Customer's exact research question: " + topic + "\n\n"
-            "Verified and publisher-reported source context (JSON):\n"
-            + json.dumps(context, sort_keys=True, ensure_ascii=False)
-            + "\n\nAnswer the exact question. Cover every requested dimension. Do not replace missing "
-            "evidence with unrelated metrics. Distinguish observed data, publisher-reported claims and "
-            "analytical judgement. Cite supplied source names inline."
-        }]}],
-        "generationConfig": {"temperature": 0.15, "maxOutputTokens": 1800},
+    instructions = (
+        "You are MERIDIAN's blockchain research analyst. Use only supplied research context. "
+        "Never invent metrics, projects, capabilities, events or sources. Separate measured data, "
+        "publisher claims and analysis. Answer the exact question and cover each requested dimension. "
+        "NEAR Protocol means the NEAR blockchain, not DeFi protocols. State clearly when evidence is missing."
+    )
+    user_input = (
+        "Customer's exact research question: " + topic + "\n\n"
+        "Verified and publisher-reported source context (JSON):\n"
+        + json.dumps(context, sort_keys=True, ensure_ascii=False)
+        + "\n\nAnswer the exact question. Cover every requested dimension. Do not replace missing "
+        "evidence with unrelated metrics. Distinguish observed data, publisher-reported claims and "
+        "analytical judgement. Cite supplied source names inline."
+    )
+    models = list(dict.fromkeys([primary_model, fallback_model]))
+    timeout = httpx.Timeout(90.0, connect=12.0)
+    attempts = []
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for model_index, model in enumerate(models):
+            # Retry only transient gateway/provider failures once before switching models.
+            for attempt in range(2):
+                try:
+                    response = await client.post(
+                        base_url + "/responses",
+                        headers={
+                            "Authorization": "Bearer " + api_key,
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": model,
+                            "instructions": instructions,
+                            "input": user_input,
+                            "max_output_tokens": 1800,
+                            "temperature": 0.15,
+                        },
+                    )
+                    if response.status_code in (429, 500, 502, 503, 504):
+                        attempts.append({"model": model, "http_status": response.status_code})
+                        if attempt == 0:
+                            await __import__("asyncio").sleep(1.0)
+                            continue
+                        break
+                    response.raise_for_status()
+                    result = response.json()
+                    text_parts = []
+                    for output_item in result.get("output", []):
+                        if not isinstance(output_item, dict) or output_item.get("type") != "message":
+                            continue
+                        for part in output_item.get("content", []):
+                            if isinstance(part, dict) and part.get("type") == "output_text" and isinstance(part.get("text"), str):
+                                text_parts.append(part["text"])
+                    content = "\n".join(text_parts).strip()
+                    if not content:
+                        raise ValueError("AgentRouter returned an empty analysis.")
+                    return content, {
+                        "status": "completed", "provider": "agentrouter",
+                        "model": model, "fallback_used": model_index > 0,
+                        "usage": result.get("usage"), "response_id": result.get("id"),
+                        "attempts": attempts,
+                    }
+                except httpx.HTTPStatusError as exc:
+                    status_code = exc.response.status_code
+                    try:
+                        error_payload = exc.response.json()
+                        message = (
+                            (error_payload.get("error") or {}).get("message")
+                            or error_payload.get("message") or ""
+                        ).strip()
+                    except (ValueError, TypeError, AttributeError):
+                        message = ""
+                    attempts.append({"model": model, "http_status": status_code})
+                    if status_code in (429, 500, 502, 503, 504):
+                        if attempt == 0:
+                            await __import__("asyncio").sleep(1.0)
+                            continue
+                        break
+                    safe_message = message.replace(api_key, "[redacted]")[:180] if message else "AgentRouter rejected the request."
+                    return None, {
+                        "status": "unavailable_fallback_used", "provider": "agentrouter",
+                        "model": model, "error": f"AgentRouter API returned HTTP {status_code}: {safe_message}",
+                        "attempts": attempts,
+                    }
+                except httpx.RequestError as exc:
+                    attempts.append({"model": model, "error": type(exc).__name__})
+                    if attempt == 0:
+                        await __import__("asyncio").sleep(1.0)
+                        continue
+                    break
+                except (ValueError, KeyError, TypeError) as exc:
+                    attempts.append({"model": model, "error": type(exc).__name__})
+                    break
+
+    return None, {
+        "status": "unavailable_fallback_used", "provider": "agentrouter",
+        "model": primary_model, "fallback_model": fallback_model,
+        "error": "AgentRouter analysis failed on the primary and fallback models.",
+        "attempts": attempts,
     }
-    timeout = httpx.Timeout(75.0, connect=10.0)
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{GEMINI_API_BASE}/models/{model}:generateContent",
-                params={"key": gemini_key},
-                headers={"Content-Type": "application/json"},
-                json=payload,
-            )
-            response.raise_for_status()
-            result = response.json()
-        parts = result["candidates"][0]["content"]["parts"]
-        content = "\n".join(
-            part["text"] for part in parts
-            if isinstance(part, dict) and isinstance(part.get("text"), str)
-        ).strip()
-        if not content:
-            raise ValueError("Gemini returned an empty analysis.")
-        return content, {
-            "status": "completed", "provider": "google_gemini",
-            "model": model, "usage": result.get("usageMetadata"),
-        }
-    except httpx.HTTPStatusError as exc:
-        status_code = exc.response.status_code
-        try:
-            error_payload = exc.response.json()
-            message = ((error_payload.get("error") or {}).get("message") or "").strip()
-        except (ValueError, TypeError, AttributeError):
-            message = ""
-        safe_message = message.replace(gemini_key, "[redacted]")[:180] if message else "Google rejected the Gemini request."
-        return None, {
-            "status": "unavailable_fallback_used", "provider": "google_gemini",
-            "model": model, "error": f"Gemini API returned HTTP {status_code}: {safe_message}",
-        }
-    except httpx.RequestError as exc:
-        return None, {
-            "status": "unavailable_fallback_used", "provider": "google_gemini",
-            "model": model, "error": f"Gemini network request failed ({type(exc).__name__}).",
-        }
-    except (ValueError, KeyError, IndexError, TypeError) as exc:
-        return None, {
-            "status": "unavailable_fallback_used", "provider": "google_gemini",
-            "model": model, "error": f"Gemini response could not be parsed ({type(exc).__name__}).",
-        }
 
 async def generate_live_report(
     topic: str, default_chain: str = "Near"
