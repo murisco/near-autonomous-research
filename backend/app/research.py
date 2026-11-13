@@ -571,7 +571,21 @@ async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | No
                             continue
                         break
                     response.raise_for_status()
-                    result = response.json()
+                    try:
+                        result = response.json()
+                    except json.JSONDecodeError:
+                        # A 2xx response can still contain an HTML gateway page,
+                        # plain text, or an unexpected upstream payload. Record a
+                        # short redacted preview so the audit trail shows why parsing failed.
+                        body_preview = response.text[:500].replace(api_key, "[redacted]")
+                        attempts.append({
+                            "model": model,
+                            "http_status": response.status_code,
+                            "error": "JSONDecodeError",
+                            "content_type": response.headers.get("content-type", "")[:120],
+                            "body_preview": body_preview,
+                        })
+                        break
                     text_parts = []
                     for output_item in result.get("output", []):
                         if not isinstance(output_item, dict) or output_item.get("type") != "message":
