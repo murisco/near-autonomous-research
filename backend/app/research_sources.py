@@ -337,6 +337,7 @@ async def collect_defillama_context(topic: str, default_chain: str = "Near") -> 
 
 
 STABLECOINS_BASE = DEFILLAMA_BASE
+STABLECOINS_FALLBACK_BASES = ("https://stablecoins.llama.fi",)
 
 
 def _stablecoin_usd_value(value: Any) -> float | None:
@@ -399,33 +400,93 @@ def parse_stablecoin_chain_aggregate(rows: list[dict], chain: str) -> float | No
     return None
 
 
-async def collect_stablecoin_context(chain: str = "Near") -> dict:
-    """Collect stablecoin supply with independent endpoint fallbacks and partial-result handling."""
-    headers = {"User-Agent": "MERIDIAN-Autonomous-Research/0.6"}
-    timeout = httpx.Timeout(20.0, connect=8.0)
-    chart_url = STABLECOINS_BASE + "/stablecoincharts/" + quote(chain, safe="")
-    assets_url = STABLECOINS_BASE + "/stablecoins?includePrices=true"
-    chains_url = STABLECOINS_BASE + "/stablecoinchains"
-    errors: list[str] = []
+def _stablecoin_payload_has_chain_data(label: str, payload: Any, chain: str) -> bool:
+    """Reject 200 responses that are empty, malformed, or missing the requested chain."""
+    if label == "chain_history":
+        return isinstance(payload, list) and any(
+            isinstance(row, dict)
+            and timestamp_seconds(row.get("date")) is not None
+            and _stablecoin_usd_value(
+                row.get("totalCirculatingUSD", row.get("totalCirculatingUsd", row.get("totalCirculating")))
+            ) is not None
+            for row in payload
+        )
+    if label == "stablecoin_catalogue":
+        if isinstance(payload, dict):
+            rows = payload.get("peggedAssets") or payload.get("stablecoins") or []
+        elif isinstance(payload, list):
+            rows = payload
+        else:
+            return False
+        return bool(parse_stablecoin_chain_assets(rows, chain))
+    if label == "chain_aggregate":
+        return isinstance(payload, list) and parse_stablecoin_chain_aggregate(payload, chain) is not None
+    return False
 
-    async def fetch_json(client: httpx.AsyncClient, url: str, label: str):
-        try:
-            response = await client.get(url)
+
+async def collect_stablecoin_context(chain: str = "Near") -> dict:
+    """Collect stablecoin supply with host fallback, response-shape checks, and explicit diagnostics."""
+    headers = {"User-Agent": "MERIDIAN-Autonomous-Research/0.7"}
+    timeout = httpx.Timeout(20.0, connect=8.0)
+    endpoint_paths = {
+        "chain_history": "/stablecoincharts/" + quote(chain, safe=""),
+        "stablecoin_catalogue": "/stablecoins?includePrices=true",
+        "chain_aggregate": "/stablecoinchains",
+    }
+    hosts = tuple(dict.fromkeys(
+        [STABLECOINS_BASE.rstrip("/")]
+        + [host.rstrip("/") for host in STABLECOINS_FALLBACK_BASES]
+    ))
+    endpoint_checks: dict[str, dict] = {}
+    unavailable_errors: list[str] = []
+
+    async def fetch_json(client: httpx.AsyncClient, label: str, path: str):
+        attempts: list[dict] = []
+        for host in hosts:
+            url = host + path
+            try:
+                response = await client.get(url)
+            except (httpx.HTTPError, ValueError, TypeError) as exc:
+                attempts.append({"url": url, "error": type(exc).__name__})
+                continue
+
             if response.status_code >= 400:
-                errors.append(f"{label}_http_{response.status_code}")
-                return None
-            return response.json()
-        except (httpx.HTTPError, ValueError, TypeError) as exc:
-            errors.append(f"{label}_{type(exc).__name__}")
-            return None
+                attempts.append({"url": url, "http_status": response.status_code})
+                continue
+
+            try:
+                payload = response.json()
+            except (ValueError, TypeError):
+                attempts.append({"url": url, "error": "invalid_json"})
+                continue
+
+            if not _stablecoin_payload_has_chain_data(label, payload, chain):
+                attempts.append({"url": url, "http_status": response.status_code, "error": "unexpected_or_empty_chain_payload"})
+                continue
+
+            endpoint_checks[label] = {
+                "status": "available",
+                "url": url,
+                "http_status": response.status_code,
+                "attempts": attempts,
+            }
+            return payload, url
+
+        endpoint_checks[label] = {
+            "status": "unavailable",
+            "url": None,
+            "attempts": attempts,
+        }
+        unavailable_errors.append(label + "_unavailable")
+        return None, None
 
     async with httpx.AsyncClient(
         timeout=timeout, headers=headers, follow_redirects=True
     ) as client:
-        chart, assets_payload, chain_rows = await asyncio.gather(
-            fetch_json(client, chart_url, "chain_history"),
-            fetch_json(client, assets_url, "stablecoin_catalogue"),
-            fetch_json(client, chains_url, "chain_aggregate"),
+        (chart, chart_url), (assets_payload, assets_url), (chain_rows, chains_url) = await asyncio.gather(
+            fetch_json(client, "chain_history", endpoint_paths["chain_history"]),
+            fetch_json(client, "stablecoin_catalogue", endpoint_paths["stablecoin_catalogue"]),
+            fetch_json(client, "chain_aggregate", endpoint_paths["chain_aggregate"]),
         )
 
     history = []
@@ -476,12 +537,17 @@ async def collect_stablecoin_context(chain: str = "Near") -> dict:
     if chart_total is None:
         warnings.append("Chain-level historical stablecoin data was unavailable; current supply uses a fallback source.")
     if chart_total is None and chain_aggregate is None and reconstructed_total is None:
-        warnings.append("No independent stablecoin supply endpoint returned a usable NEAR value.")
+        warnings.append("No independent stablecoin supply endpoint returned a usable " + chain + " value.")
     if chart_total is not None and reconstructed_total is not None and reconstructed_total > 0:
         divergence = (reconstructed_total / chart_total - 1) * 100
         if abs(divergence) > 15:
             warnings.append("Per-asset supply sum differs from chain aggregate by more than 15%; catalogue coverage, aliases, or endpoint timing may differ.")
-    warnings.extend(errors)
+    for label, check in endpoint_checks.items():
+        if check.get("status") != "available":
+            warnings.append("Stablecoin " + label.replace("_", " ") + " endpoint was unavailable on all configured hosts.")
+    for label, check in endpoint_checks.items():
+        if check.get("status") == "available" and check.get("attempts"):
+            warnings.append("Stablecoin " + label.replace("_", " ") + " required a compatibility-host fallback; see endpoint diagnostics.")
 
     return {
         "status": "available" if total is not None or asset_rows else "unavailable",
@@ -499,11 +565,17 @@ async def collect_stablecoin_context(chain: str = "Near") -> dict:
         "asset_count": len(asset_rows),
         "asset_sum_usd": round(reconstructed_total, 2) if reconstructed_total is not None else None,
         "chain_aggregate_usd": round(chain_aggregate, 2) if chain_aggregate is not None else None,
+        "endpoint_checks": endpoint_checks,
         "quality_warnings": warnings,
         "retrieved_at": retrieved.isoformat(),
-        "sources": [chart_url, assets_url, chains_url],
+        "sources": [
+            chart_url or (STABLECOINS_BASE + endpoint_paths["chain_history"]),
+            assets_url or (STABLECOINS_BASE + endpoint_paths["stablecoin_catalogue"]),
+            chains_url or (STABLECOINS_BASE + endpoint_paths["chain_aggregate"]),
+        ],
         "limitations": "Stablecoin supply is not equivalent to available DEX liquidity, trading volume, or user adoption; coverage and classification depend on DefiLlama's stablecoin catalogue.",
     }
+
 
 def _find_rows(payload: Any) -> list[dict]:
     if isinstance(payload, list):
