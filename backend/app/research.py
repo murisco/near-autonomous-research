@@ -360,11 +360,11 @@ async def generate_live_report(
 ) -> tuple[str, str, str, dict]:
     chain_task = collect_defillama_context(topic, default_chain)
     activity_task = collect_nearblocks_activity()
-    stablecoin_task = collect_stablecoin_context(default_chain)
     official_task = collect_official_near_context()
     projects_task = collect_near_agent_projects()
 
     chain_context = await chain_task
+    stablecoin_task = collect_stablecoin_context(chain_context.get("chain", default_chain))
     activity_result, stablecoin_result, official_result, projects_result = await __import__("asyncio").gather(
         activity_task, stablecoin_task, official_task, projects_task, return_exceptions=True
     )
