@@ -20,6 +20,10 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const headers = new Headers();
   const contentType = request.headers.get("content-type");
   if (contentType) headers.set("content-type", contentType);
+  const cookie = request.headers.get("cookie");
+  if (cookie) headers.set("cookie", cookie);
+  const browserRequest = request.headers.get("x-meridian-requested");
+  if (browserRequest) headers.set("x-meridian-requested", browserRequest);
 
   const method = request.method.toUpperCase();
   const body = method === "GET" || method === "HEAD" ? undefined : await request.text();
@@ -34,6 +38,8 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     const responseHeaders = new Headers();
     const upstreamType = upstream.headers.get("content-type");
     if (upstreamType) responseHeaders.set("content-type", upstreamType);
+    const setCookie = upstream.headers.get("set-cookie");
+    if (setCookie) responseHeaders.set("set-cookie", setCookie);
     return new Response(upstream.body, {
       status: upstream.status,
       headers: responseHeaders,
