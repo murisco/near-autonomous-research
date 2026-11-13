@@ -204,6 +204,21 @@ def analyse_tvl_history(current_tvl: float, history: list[dict], days: int = 30)
     }
 
 
+def select_chain_from_topic(topic: str, chain_names: list[str], default_chain: str = "Near") -> str | None:
+    """Match chain names as whole phrases, never substrings inside ordinary words."""
+    mentioned = [
+        name for name in chain_names
+        if re.search(
+            r"(?<![A-Za-z0-9])" + re.escape(name) + r"(?![A-Za-z0-9])",
+            topic or "",
+            flags=re.IGNORECASE,
+        )
+    ]
+    if mentioned:
+        return sorted(mentioned, key=len, reverse=True)[0]
+    return next((name for name in chain_names if name.casefold() == default_chain.casefold()), None)
+
+
 async def collect_defillama_context(topic: str, default_chain: str = "Near") -> dict:
     timeout = httpx.Timeout(20.0, connect=8.0)
     headers = {"User-Agent": "MERIDIAN-Autonomous-Research/0.3"}
@@ -221,11 +236,7 @@ async def collect_defillama_context(topic: str, default_chain: str = "Near") -> 
         str(item.get("name", "")) for item in chains
         if isinstance(item, dict) and item.get("name")
     ]
-    mentioned = [name for name in names if name.casefold() in topic.casefold()]
-    selected = (
-        sorted(mentioned, key=len, reverse=True)[0]
-        if mentioned else next((name for name in names if name.casefold() == default_chain.casefold()), None)
-    )
+    selected = select_chain_from_topic(topic, names, default_chain)
     if not selected:
         raise ResearchSourceError("The requested chain was not found in DefiLlama's chain catalogue.")
     chain_row = next(
