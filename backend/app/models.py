@@ -55,19 +55,6 @@ class AuditEvent(Base):
     order: Mapped[Order | None] = relationship(back_populates="events")
 
 
-class EmailLoginCode(Base):
-    __tablename__ = "email_login_codes"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    email: Mapped[str] = mapped_column(String(320), index=True, nullable=False)
-    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    salt: Mapped[str] = mapped_column(String(64), nullable=False)
-    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-
-
 class AuthSession(Base):
     __tablename__ = "auth_sessions"
 
