@@ -152,7 +152,7 @@ async def process_order(db: Session, request: OrderCreate) -> dict:
     add_event(
         db,
         order_id,
-        "demo_report_generated",
+        "report_generated",
         {"report_id": report_id, "data_mode": data_mode},
     )
     add_event(db, order_id, "research_sources_recorded", research_meta)
