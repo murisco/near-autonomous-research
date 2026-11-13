@@ -9,19 +9,20 @@ import hmac
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select, text
 from sqlalchemy.orm import Session, joinedload
 
 from .config import load_business_rules
 from .database import Base, engine, get_db
-from .models import AuditEvent, AuthSession, EmailLoginCode, Order, Report
+from .models import AuditEvent, AuthSession, NearLoginChallenge, Order, Report
 from .payments import create_tidepool_dry_quote
 from .policy import PolicyViolation, enforce_order_policy
 from .research import ResearchSourceError, generate_report
-from .schemas import DemoRunRequest, EmailCodeRequest, OrderCreate, VerifyEmailCodeRequest
-from .auth import (
-    LOGIN_CODE_TTL_MINUTES, SESSION_COOKIE, SESSION_TTL_SECONDS,
-    code_digest, deliver_login_code, is_admin_email, secure_cookie, token_digest,
+from .schemas import DemoRunRequest, NearAuthVerifyRequest, OrderCreate
+from .auth import SESSION_COOKIE, SESSION_TTL_SECONDS, secure_cookie, token_digest
+from .near_auth import (
+    account_has_full_access_key, admin_account_ids, auth_recipient,
+    is_admin_account, valid_account_id, verify_nep413_signature,
 )
 
 app = FastAPI(
@@ -50,6 +51,14 @@ app.add_middleware(
 @app.on_event("startup")
 def startup() -> None:
     Base.metadata.create_all(bind=engine)
+    # Additive migration for existing Railway databases; no customer data is removed.
+    with engine.begin() as connection:
+        order_columns = {column["name"] for column in inspect(connection).get_columns("orders")}
+        if "buyer_account_id" not in order_columns:
+            connection.execute(text("ALTER TABLE orders ADD COLUMN buyer_account_id VARCHAR(128)"))
+        session_columns = {column["name"] for column in inspect(connection).get_columns("auth_sessions")}
+        if "account_id" not in session_columns:
+            connection.execute(text("ALTER TABLE auth_sessions ADD COLUMN account_id VARCHAR(128)"))
 
 
 def require_browser_request(request: Request) -> None:
@@ -69,8 +78,10 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> dict:
     )
     if not session:
         raise HTTPException(status_code=401, detail="Your session has expired. Please sign in again.")
-    role = "admin" if is_admin_email(session.email) else "customer"
-    return {"email": session.email, "role": role}
+    if not session.account_id:
+        raise HTTPException(status_code=401, detail="This legacy email session is no longer valid. Sign in with your NEAR wallet.")
+    role = "admin" if is_admin_account(session.account_id) else "customer"
+    return {"account_id": session.account_id, "role": role}
 
 
 def require_admin(user: dict = Depends(get_current_user)) -> dict:
@@ -79,104 +90,94 @@ def require_admin(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
-@app.post("/api/auth/request-code", dependencies=[Depends(require_browser_request)])
-async def request_email_code(payload: EmailCodeRequest, db: Session = Depends(get_db)) -> dict:
+@app.post("/api/auth/nonce", dependencies=[Depends(require_browser_request)])
+def create_near_login_nonce(db: Session = Depends(get_db)) -> dict:
     now = datetime.utcnow()
-    try:
-        from .auth import auth_secret
-        auth_secret()
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="Email sign-in is not configured yet.") from exc
-
-    recent_count = db.scalar(
-        select(func.count(EmailLoginCode.id)).where(
-            EmailLoginCode.email == payload.email,
-            EmailLoginCode.created_at >= now - timedelta(hours=1),
-        )
-    ) or 0
-    latest = db.scalar(
-        select(EmailLoginCode)
-        .where(EmailLoginCode.email == payload.email)
-        .order_by(EmailLoginCode.created_at.desc())
-        .limit(1)
+    challenge_id = str(uuid4())
+    nonce_b64 = __import__("base64").b64encode(secrets.token_bytes(32)).decode("ascii")
+    recipient = auth_recipient()
+    expires_at = now + timedelta(minutes=5)
+    issued = now.replace(microsecond=0).isoformat() + "Z"
+    expires = expires_at.replace(microsecond=0).isoformat() + "Z"
+    message = (
+        "Sign in to MERIDIAN (identity only).\\n"
+        f"Website: https://{recipient}\\n"
+        "Purpose: Prove control of the NEAR account selected in your wallet.\\n"
+        f"Challenge: {challenge_id}\\n"
+        f"Issued: {issued}\\n"
+        f"Expires: {expires}\\n\\n"
+        "This is an off-chain message signature only. It does not approve a transaction, "
+        "transfer tokens, grant an allowance, or authorize a payment."
     )
-    if latest and latest.created_at >= now - timedelta(seconds=60):
-        raise HTTPException(status_code=429, detail="Please wait a minute before requesting another code.")
-    if recent_count >= 5:
-        raise HTTPException(status_code=429, detail="Too many sign-in codes requested. Try again in an hour.")
-
-    active_codes = db.scalars(
-        select(EmailLoginCode).where(
-            EmailLoginCode.email == payload.email,
-            EmailLoginCode.consumed_at.is_(None),
-        )
-    ).all()
-    for existing in active_codes:
-        existing.consumed_at = now
-
-    code = f"{secrets.randbelow(1_000_000):06d}"
-    salt = secrets.token_hex(16)
     db.add(
-        EmailLoginCode(
-            id=str(uuid4()),
-            email=payload.email,
-            code_hash=code_digest(payload.email, code, salt),
-            salt=salt,
-            attempts=0,
-            expires_at=now + timedelta(minutes=LOGIN_CODE_TTL_MINUTES),
+        NearLoginChallenge(
+            id=challenge_id,
+            nonce_b64=nonce_b64,
+            message=message,
+            recipient=recipient,
+            expires_at=expires_at,
         )
     )
-    try:
-        await deliver_login_code(payload.email, code)
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=503,
-            detail="We could not send the sign-in email. Please check the email service configuration and try again.",
-        ) from exc
-    return {"ok": True, "message": "A sign-in code has been sent to your email address."}
+    db.commit()
+    return {
+        "challenge_id": challenge_id,
+        "nonce": nonce_b64,
+        "message": message,
+        "recipient": recipient,
+        "expires_at": expires,
+        "network": "mainnet",
+    }
 
 
-@app.post("/api/auth/verify-code", dependencies=[Depends(require_browser_request)])
-def verify_email_code(
-    payload: VerifyEmailCodeRequest,
+@app.post("/api/auth/verify", dependencies=[Depends(require_browser_request)])
+async def verify_near_login(
+    payload: NearAuthVerifyRequest,
     response: Response,
     db: Session = Depends(get_db),
 ) -> dict:
-    try:
-        from .auth import auth_secret
-        auth_secret()
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="Email sign-in is not configured yet.") from exc
-
-    now = datetime.utcnow()
-    login_code = db.scalar(
-        select(EmailLoginCode)
-        .where(
-            EmailLoginCode.email == payload.email,
-            EmailLoginCode.consumed_at.is_(None),
+    challenge = db.scalar(
+        select(NearLoginChallenge).where(
+            NearLoginChallenge.id == payload.challenge_id,
+            NearLoginChallenge.consumed_at.is_(None),
         )
-        .order_by(EmailLoginCode.created_at.desc())
-        .limit(1)
     )
-    if not login_code or login_code.expires_at <= now:
-        raise HTTPException(status_code=400, detail="That code has expired. Request a new one.")
-    if login_code.attempts >= 5:
-        raise HTTPException(status_code=429, detail="Too many incorrect attempts. Request a new code.")
+    now = datetime.utcnow()
+    if not challenge or challenge.expires_at <= now:
+        raise HTTPException(status_code=400, detail="That login request has expired. Please try again.")
+    if not valid_account_id(payload.account_id):
+        raise HTTPException(status_code=400, detail="The wallet returned an invalid NEAR account ID.")
 
-    login_code.attempts += 1
-    expected = code_digest(payload.email, payload.code, login_code.salt)
-    if not hmac.compare_digest(login_code.code_hash, expected):
-        db.commit()
-        raise HTTPException(status_code=400, detail="That code is incorrect.")
+    valid_signature = verify_nep413_signature(
+        challenge.message,
+        challenge.nonce_b64,
+        challenge.recipient,
+        payload.public_key,
+        payload.signature,
+    )
+    if not valid_signature:
+        raise HTTPException(status_code=401, detail="NEAR message signature could not be verified.")
 
-    login_code.consumed_at = now
+    try:
+        full_access = await account_has_full_access_key(payload.account_id, payload.public_key)
+    except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="NEAR RPC is temporarily unavailable. No session was created; please try again.",
+        ) from exc
+    if not full_access:
+        raise HTTPException(
+            status_code=401,
+            detail="The signing key is not a current full-access key for this NEAR account.",
+        )
+
+    # Consume the challenge before creating a session so the same signature cannot be replayed.
+    challenge.consumed_at = now
     raw_token = secrets.token_urlsafe(32)
     db.add(
         AuthSession(
             id=str(uuid4()),
-            email=payload.email,
+            email="",  # Legacy non-null column retained for an additive database migration.
+            account_id=payload.account_id,
             token_hash=token_digest(raw_token),
             expires_at=now + timedelta(seconds=SESSION_TTL_SECONDS),
         )
@@ -191,7 +192,11 @@ def verify_email_code(
         samesite="lax",
         path="/",
     )
-    return {"ok": True, "email": payload.email, "role": "admin" if is_admin_email(payload.email) else "customer"}
+    return {
+        "ok": True,
+        "account_id": payload.account_id,
+        "role": "admin" if is_admin_account(payload.account_id) else "customer",
+    }
 
 
 @app.get("/api/auth/me")
@@ -238,7 +243,7 @@ def serialize_order(order: Order, include_report: bool = False, admin: bool = Fa
     }
     if admin:
         payload.update({
-            "buyer_email": order.buyer_email,
+            "buyer_account_id": order.buyer_account_id,
             "inference_cost_usd": round(order.inference_cost_usd, 2),
             "projected_profit_usd": round(order.projected_profit_usd, 2),
             "operator_share_usd": round(order.operator_share_usd, 2),
@@ -272,7 +277,8 @@ async def process_order(db: Session, request: OrderCreate, force_demo: bool = Fa
     order = Order(
         id=order_id,
         topic=request.topic,
-        buyer_email=request.buyer_email,
+        buyer_email=None,
+        buyer_account_id=request.buyer_account_id,
         price_usd=request.price_usd,
         inference_cost_usd=inference_cost,
         status="researching",
@@ -452,7 +458,7 @@ def dashboard(db: Session = Depends(get_db), user: dict = Depends(require_admin)
 
 @app.post("/api/orders", dependencies=[Depends(require_browser_request)])
 async def create_order(request: OrderCreate, db: Session = Depends(get_db), user: dict = Depends(get_current_user)) -> dict:
-    owned_request = request.model_copy(update={"buyer_email": user["email"]})
+    owned_request = request.model_copy(update={"buyer_email": None, "buyer_account_id": user["account_id"]})
     result = await process_order(db, owned_request)
     if user["role"] == "admin":
         order = db.scalar(select(Order).where(Order.id == result["id"]))
@@ -472,7 +478,7 @@ def list_orders(limit: int = 50, db: Session = Depends(get_db), user: dict = Dep
     limit = max(1, min(limit, 100))
     query = select(Order).options(joinedload(Order.report)).order_by(Order.created_at.desc())
     if user["role"] != "admin":
-        query = query.where(Order.buyer_email == user["email"])
+        query = query.where(Order.buyer_account_id == user["account_id"])
     orders = db.scalars(query.limit(limit)).unique().all()
     return {"items": [serialize_order(order, admin=user["role"] == "admin") for order in orders], "count": len(orders)}
 
@@ -482,7 +488,7 @@ def get_order(order_id: str, db: Session = Depends(get_db), user: dict = Depends
     order = db.scalar(
         select(Order).options(joinedload(Order.report)).where(Order.id == order_id)
     )
-    if not order or (user["role"] != "admin" and order.buyer_email != user["email"]):
+    if not order or (user["role"] != "admin" and order.buyer_account_id != user["account_id"]):
         raise HTTPException(status_code=404, detail="Order not found.")
     payload = serialize_order(order, include_report=True, admin=user["role"] == "admin")
     quote_event = db.scalar(
@@ -510,7 +516,7 @@ def ledger(limit: int = 100, db: Session = Depends(get_db), user: dict = Depends
     limit = max(1, min(limit, 250))
     query = select(AuditEvent).order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
     if user["role"] != "admin":
-        query = query.join(Order, AuditEvent.order_id == Order.id).where(Order.buyer_email == user["email"])
+        query = query.join(Order, AuditEvent.order_id == Order.id).where(Order.buyer_account_id == user["account_id"])
     events = db.scalars(query.limit(limit)).all()
     items = []
     for event in events:
