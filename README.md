@@ -32,7 +32,7 @@ The first end-to-end **demo workflow** is implemented:
 - **Business API:** FastAPI order lifecycle, orchestration, business policy, and report delivery.
 - **Database:** SQLAlchemy models, SQLite for local development, and PostgreSQL support for deployment.
 - **Policy engine:** YAML business rules with daily inference budget, report price floor, revenue split, and kill switch.
-- **Research provider:** synthetic demo provider today; source-backed chain research and NEAR AI Cloud adapter are planned.
+- **Research provider:** synthetic demo provider or optional live DefiLlama data plus NEAR AI Cloud analysis.
 - **NEAR adapter:** NEAR AI Cloud and NEAR Intents integration are planned; no live calls are made by this demo build.
 
 ## Human-defined operating rules
@@ -45,7 +45,7 @@ The business enforces:
 - A kill switch to pause new orders.
 - Human approval for payouts and irreversible actions.
 
-The current example values in `config/business-rules.yaml` are for the hackathon demo only. Review them before any real operation. Payments and mainnet execution remain disabled.
+The current example values in `config/business-rules.yaml` are for the hackathon demo only. Set `research.mode` to `live` to enable DefiLlama chain TVL research and optional NEAR AI Cloud analysis. Add `NEAR_AI_API_KEY` to use NEAR AI Cloud. Review all values before any real operation. Payments and mainnet execution remain disabled.
 
 ## Local development
 
@@ -62,7 +62,7 @@ uvicorn backend.app.main:app --reload --port 8000
 
 The API will be available at `http://localhost:8000`. Interactive API documentation is at `http://localhost:8000/docs`.
 
-The default database is a local SQLite file named `data.db`. Set `DATABASE_URL` to a PostgreSQL URL to use PostgreSQL instead.
+The default database is a local SQLite file named `data.db`. Set `DATABASE_URL` to a PostgreSQL URL to use PostgreSQL instead. To switch from synthetic reports to source-backed research, change `research.mode` from `demo` to `live` in `config/business-rules.yaml`.
 
 ### 2. Start the dashboard
 
@@ -89,7 +89,7 @@ GitHub Actions also runs the backend test suite on pushes and pull requests to `
 
 ## Demo safety and accounting
 
-- Research output is labelled `synthetic_demo`; it is not live chain analysis.
+- Research output is labelled `synthetic_demo` by default. Live mode uses DefiLlama for chain TVL and protocol snapshots; if `NEAR_AI_API_KEY` is configured, report analysis is generated through NEAR AI Cloud.
 - Payment quotes are simulations only. No payment provider or NEAR Intents endpoint is called.
 - Unpaid orders count toward quoted sales, not collected revenue.
 - Inference costs and revenue shares are projections, not real transfers.
