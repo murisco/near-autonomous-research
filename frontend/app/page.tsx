@@ -97,7 +97,8 @@ export default function Home() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [activeTab, setActiveTab] = useState<"orders" | "ledger">("orders");
-  const [selectedReport, setSelectedReport] = useState<Report | null>(null);\n  const [paymentQuote, setPaymentQuote] = useState<PaymentQuote | null>(null);
+  const [selectedReport, setSelectedReport] = useState<Report | null>(null);
+  const [paymentQuote, setPaymentQuote] = useState<PaymentQuote | null>(null);
 
   const refresh = useCallback(async () => {
     try {
