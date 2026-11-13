@@ -18,6 +18,8 @@ type DashboardData = {
   near_ai_cloud_configured: boolean;
 };
 
+type AuthUser = { email: string; role: "admin" | "customer" };
+
 type Order = {
   id: string;
   topic: string;
@@ -86,14 +88,22 @@ function downloadReport(report: Report) {
 }
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method || "GET").toUpperCase();
   const response = await fetch("/api/" + path, {
     ...options,
-    headers: { "Content-Type": "application/json", ...(options?.headers || {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...(method !== "GET" && method !== "HEAD" ? { "X-Meridian-Requested": "1" } : {}),
+      ...(options?.headers || {}),
+    },
     cache: "no-store",
+    credentials: "same-origin",
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.detail || "The request could not be completed.");
+    const error = new Error(payload.detail || "The request could not be completed.") as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
   return payload as T;
 }
@@ -112,24 +122,54 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<"orders" | "ledger">("orders");
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
   const [paymentQuote, setPaymentQuote] = useState<PaymentQuote | null>(null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authCode, setAuthCode] = useState("");
+  const [authStep, setAuthStep] = useState<"email" | "code">("email");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authMessage, setAuthMessage] = useState("");
 
   const refresh = useCallback(async () => {
     try {
-      const [summary, orderData, ledgerData, policy] = await Promise.all([
-        api<DashboardData>("dashboard"),
-        api<{ items: Order[] }>("orders?limit=8"),
-        api<{ items: LedgerEvent[] }>("ledger?limit=10"),
-        api<Rules>("rules"),
-      ]);
-      setDashboard(summary);
-      setOrders(orderData.items || []);
-      setEvents(ledgerData.items || []);
-      setRules(policy);
+      const me = await api<AuthUser>("auth/me");
+      setAuthUser(me);
+      if (me.role === "admin") {
+        const [summary, orderData, ledgerData, policy] = await Promise.all([
+          api<DashboardData>("dashboard"),
+          api<{ items: Order[] }>("orders?limit=8"),
+          api<{ items: LedgerEvent[] }>("ledger?limit=10"),
+          api<Rules>("rules"),
+        ]);
+        setDashboard(summary);
+        setOrders(orderData.items || []);
+        setEvents(ledgerData.items || []);
+        setRules(policy);
+      } else {
+        const [orderData, policy] = await Promise.all([
+          api<{ items: Order[] }>("orders?limit=30"),
+          api<Rules>("rules"),
+        ]);
+        setDashboard(null);
+        setOrders(orderData.items || []);
+        setEvents([]);
+        setRules(policy);
+      }
       setError("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to connect to the backend.");
+      const status = (err as Error & { status?: number }).status;
+      setAuthUser(null);
+      setDashboard(null);
+      setOrders([]);
+      setEvents([]);
+      if (status === 401) {
+        setError("");
+      } else {
+        setError(err instanceof Error ? err.message : "Unable to connect to the backend.");
+      }
     } finally {
       setLoading(false);
+      setAuthLoading(false);
     }
   }, []);
 
@@ -173,6 +213,61 @@ export default function Home() {
     }
   }
 
+  async function requestLoginCode(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAuthBusy(true);
+    setError("");
+    setAuthMessage("");
+    try {
+      const result = await api<{ message: string }>("auth/request-code", {
+        method: "POST",
+        body: JSON.stringify({ email: authEmail }),
+      });
+      setAuthStep("code");
+      setAuthMessage(result.message || "Check your inbox for the six-digit sign-in code.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not send the sign-in code.");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function verifyLoginCode(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAuthBusy(true);
+    setError("");
+    setAuthMessage("");
+    try {
+      await api<AuthUser>("auth/verify-code", {
+        method: "POST",
+        body: JSON.stringify({ email: authEmail, code: authCode }),
+      });
+      setAuthCode("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "That code could not be verified.");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function signOut() {
+    try {
+      await api<{ ok: boolean }>("auth/logout", { method: "POST" });
+    } finally {
+      setAuthUser(null);
+      setDashboard(null);
+      setOrders([]);
+      setEvents([]);
+      setSelectedReport(null);
+      setPaymentQuote(null);
+      setAuthStep("email");
+      setAuthCode("");
+      setAuthMessage("");
+      setError("");
+    }
+  }
+
   const budgetUsed = dashboard
     ? Math.min(100, (dashboard.today_estimated_inference_spend_usd / Math.max(0.01, dashboard.today_inference_budget_usd)) * 100)
     : 0;
@@ -184,6 +279,87 @@ export default function Home() {
   const evidenceMarkdown = selectedReport && evidenceIndex >= 0
     ? selectedReport.markdown.slice(evidenceIndex)
     : "";
+
+  if (authLoading) {
+    return <main className="auth-screen"><div className="auth-card"><div className="brand-mark">M</div><h1>Loading MERIDIAN</h1><p>Checking your private workspace...</p></div></main>;
+  }
+
+  if (!authUser) {
+    return (
+      <main className="auth-screen">
+        <section className="auth-card">
+          <div className="auth-brand"><div className="brand-mark">M</div><div><div className="brand-name">MERIDIAN</div><div className="brand-caption">PRIVATE RESEARCH WORKSPACE</div></div></div>
+          <div className="eyebrow">WELCOME BACK</div>
+          <h1>{authStep === "email" ? "Sign in to MERIDIAN" : "Check your email"}</h1>
+          <p className="auth-description">{authStep === "email" ? "Enter your email and we’ll send you a one-time sign-in code." : "Enter the six-digit code we sent to " + authEmail + "."}</p>
+          {authStep === "email" ? (
+            <form className="auth-form" onSubmit={requestLoginCode}>
+              <label htmlFor="login-email">Email address</label>
+              <input id="login-email" type="email" autoComplete="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="you@example.com" maxLength={320} required />
+              <button className="primary-button" type="submit" disabled={authBusy}>{authBusy ? "Sending code..." : "Continue with email"}</button>
+            </form>
+          ) : (
+            <form className="auth-form" onSubmit={verifyLoginCode}>
+              <label htmlFor="login-code">Six-digit code</label>
+              <input id="login-code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={authCode} onChange={(event) => setAuthCode(event.target.value.replace(/[^0-9]/g, "").slice(0, 6))} placeholder="000000" required />
+              <button className="primary-button" type="submit" disabled={authBusy || authCode.length !== 6}>{authBusy ? "Verifying..." : "Verify and sign in"}</button>
+              <button className="text-button" type="button" onClick={() => { setAuthStep("email"); setAuthCode(""); setError(""); }}>Use a different email</button>
+            </form>
+          )}
+          {authMessage && <div className="auth-message">{authMessage}</div>}
+          {error && <div className="alert error-alert">{error}</div>}
+          <p className="auth-footnote">Email verification only. No wallet connection, transaction signature or payment is required to sign in.</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (authUser.role === "customer") {
+    return (
+      <main className="customer-shell">
+        <header className="customer-topbar">
+          <div className="auth-brand"><div className="brand-mark">M</div><div><div className="brand-name">MERIDIAN</div><div className="brand-caption">PRIVATE RESEARCH WORKSPACE</div></div></div>
+          <div className="customer-account"><span>{authUser.email}</span><button className="signout-button" onClick={() => void signOut()}>Sign out</button></div>
+        </header>
+        {error && <div className="alert error-alert">{error}</div>}
+        {notice && <div className="alert notice-alert">{notice}</div>}
+        <section className="customer-intro"><div className="eyebrow">YOUR WORKSPACE</div><h1>Your research</h1><p>Your questions and reports are private to this account. Only you can access this research history.</p></section>
+        <div className="customer-grid">
+          <section className="panel order-panel">
+            <div className="panel-heading"><div><div className="eyebrow">RESEARCH DESK</div><h2>Create a report</h2></div><span className="mini-tag">NEW ORDER</span></div>
+            <p className="panel-subtitle">What would you like MERIDIAN to investigate?</p>
+            <form onSubmit={submitOrder} className="order-form">
+              <label htmlFor="topic">Research question</label>
+              <textarea id="topic" value={topic} onChange={(event) => setTopic(event.target.value)} placeholder="Ask anything here or type your research question..." minLength={8} maxLength={500} required />
+              <div className="form-row"><div className="price-field"><label htmlFor="price">Report quote (USD)</label><div className="input-wrap"><span>$</span><input id="price" type="number" min={rules?.limits.minimum_report_price ?? 10} step="0.5" value={price} onChange={(event) => setPrice(event.target.value)} required /></div></div><div className="price-hint">Minimum quote<br /><strong>{money(rules?.limits.minimum_report_price ?? 10)}</strong></div></div>
+              <button type="submit" className="primary-button" disabled={busy || loading}>{busy ? <><span className="spinner" /> Generating report...</> : <>Generate research report <span>↗</span></>}</button>
+              <p className="form-footnote">Your report will be saved to this private account. No customer payment is collected.</p>
+            </form>
+          </section>
+          <section className="panel customer-orders">
+            <div className="panel-heading"><div><div className="eyebrow">PRIVATE HISTORY</div><h2>Your research orders</h2></div><button className="refresh-button" onClick={() => void refresh()} aria-label="Refresh orders">↻</button></div>
+            {orders.length === 0 ? <p className="empty-cell">{loading ? "Loading your orders..." : "Your research history will appear here after your first order."}</p> : (
+              <div className="customer-order-list">
+                {orders.map((order) => (
+                  <div className="customer-order-row" key={order.id}>
+                    <div className="customer-order-main"><strong>{order.topic}</strong><span>{prettyDate(order.created_at)} · {order.status.replaceAll("_", " ")}</span></div>
+                    <div className="customer-order-action"><strong>{money(order.price_usd)}</strong><button className="view-button" onClick={() => void openReport(order.id)}>View report</button></div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+        {selectedReport && (
+          <section className="panel report-panel">
+            <div className="panel-heading"><div><div className="eyebrow">YOUR REPORT · {selectedReport.data_mode.toUpperCase().replaceAll("_", " ")}</div><h2>{selectedReport.title}</h2></div><div className="report-actions"><button className="download-button" onClick={() => downloadReport(selectedReport)}>Download .md</button><button className="close-button" onClick={() => { setSelectedReport(null); setPaymentQuote(null); }}>Close ×</button></div></div>
+            <div className="report-content"><MarkdownView markdown={customerMarkdown} />{evidenceMarkdown && <details className="evidence-details"><summary>View full source data and methodology</summary><div className="evidence-content"><MarkdownView markdown={evidenceMarkdown} /></div></details>}</div>
+          </section>
+        )}
+        <footer className="customer-footer">MERIDIAN · PRIVATE RESEARCH · PAYMENTS DISABLED</footer>
+      </main>
+    );
+  }
 
   return (
     <main className="shell">
@@ -213,6 +389,7 @@ export default function Home() {
             <h1>Business overview</h1>
           </div>
           <div className="top-actions">
+            <span className="admin-email">{authUser.email}</span><button className="signout-button" onClick={() => void signOut()}>Sign out</button>
             <span className="demo-pill"><span /> {dashboard?.research_mode === "live" ? "LIVE RESEARCH" : "DEMO MODE"}</span>
             <button className="refresh-button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
           </div>
