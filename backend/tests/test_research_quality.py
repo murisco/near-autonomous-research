@@ -320,3 +320,7 @@ def test_ecosystem_challenge_fallback_answers_requested_dimensions():
 
 def test_near_ai_default_model_uses_current_documented_model_id():
     assert sources.NEAR_AI_DEFAULT_MODEL == "z-ai/glm-5.3-flash"
+
+
+def test_gemini_free_model_is_default():
+    assert sources.GEMINI_DEFAULT_MODEL == "gemini-3.8-flash"

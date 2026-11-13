@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 import httpx
 
 from .research_sources import (
+    GEMINI_API_BASE,
+    GEMINI_DEFAULT_MODEL,
     NEAR_AI_DEFAULT_MODEL,
     ResearchSourceError,
     collect_defillama_context,
@@ -513,47 +515,83 @@ def _customer_summary(
 
 
 async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | None, dict]:
-    api_key = os.getenv("NEAR_AI_API_KEY", "").strip()
-    if not api_key:
-        return None, {"status": "not_configured", "provider": "near_ai_cloud"}
+    """Use Gemini's free-tier API first; retain NEAR AI Cloud as an optional fallback."""
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    near_key = os.getenv("NEAR_AI_API_KEY", "").strip()
+
+    if gemini_key:
+        model = os.getenv("GEMINI_MODEL", GEMINI_DEFAULT_MODEL)
+        payload = {
+            "system_instruction": {"parts": [{"text":
+                "You are MERIDIAN's blockchain research analyst. Use only supplied research context. "
+                "Never invent metrics, projects, capabilities, events or sources. Separate measured data, "
+                "publisher claims and analysis. Answer the exact question and cover each requested dimension. "
+                "NEAR Protocol means the NEAR blockchain, not DeFi protocols. State clearly when evidence is missing."
+            }]},
+            "contents": [{"role": "user", "parts": [{"text":
+                "Customer's exact research question: " + topic + "\n\n"
+                "Verified and publisher-reported source context (JSON):\n"
+                + json.dumps(context, sort_keys=True, ensure_ascii=False)
+                + "\n\nAnswer the exact question. Cover every requested dimension. Do not replace missing "
+                "evidence with unrelated metrics. Distinguish observed data, publisher-reported claims and "
+                "analytical judgement. Cite supplied source names inline."
+            }]}],
+            "generationConfig": {"temperature": 0.15, "maxOutputTokens": 1800},
+        }
+        timeout = httpx.Timeout(75.0, connect=10.0)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    f"{GEMINI_API_BASE}/models/{model}:generateContent",
+                    params={"key": gemini_key},
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                )
+                response.raise_for_status()
+                result = response.json()
+            parts = result["candidates"][0]["content"]["parts"]
+            content = "\n".join(
+                part["text"] for part in parts
+                if isinstance(part, dict) and isinstance(part.get("text"), str)
+            ).strip()
+            if not content:
+                raise ValueError("Gemini returned an empty analysis.")
+            return content, {
+                "status": "completed", "provider": "google_gemini",
+                "model": model, "usage": result.get("usageMetadata"),
+            }
+        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
+            gemini_error = str(exc)[:240]
+            if not near_key:
+                return None, {
+                    "status": "unavailable_fallback_used", "provider": "google_gemini",
+                    "model": model, "error": gemini_error,
+                }
+    else:
+        gemini_error = None
+
+    if not near_key:
+        return None, {
+            "status": "not_configured", "provider": "google_gemini",
+            "model": GEMINI_DEFAULT_MODEL,
+            **({"error": gemini_error} if gemini_error else {}),
+        }
 
     base_url = os.getenv("NEAR_AI_BASE_URL", "https://cloud-api.near.ai/v1").rstrip("/")
     model = os.getenv("NEAR_AI_MODEL", NEAR_AI_DEFAULT_MODEL)
     payload = {
-        "model": model,
-        "temperature": 0.15,
-        "max_tokens": 1500,
+        "model": model, "temperature": 0.15, "max_tokens": 1500,
         "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are MERIDIAN's customer-facing blockchain research analyst. Use only the supplied "
-                    "research context. Never invent a metric, project capability, source, event, date, "
-                    "or adoption claim. Keep publisher-reported figures separate from independently "
-                    "queried data. Never add protocol TVL rows together unless the source explicitly "
-                    "guarantees they are non-overlapping. Answer the customer's exact question first in "
-                    "plain English. Follow the exact scope and sub-questions in the request; do not force the same "
-                    "headings or checklist onto every query. The phrase 'NEAR Protocol' means the NEAR blockchain "
-                    "and does not by itself mean the customer is asking about DeFi protocols. Explain what each "
-                    "important metric means, what it does not prove, "
-                    "and where the evidence is incomplete. Do not discuss MERIDIAN's own deployment, "
-                    "payments, internal business model, or unrelated NEAR products unless the question "
-                    "asks about them. Aim for 250-350 words and cite source names inline."
-                ),
+            {"role": "system", "content":
+                "You are MERIDIAN's blockchain research analyst. Use only supplied context. "
+                "Never invent metrics or sources. Answer the exact question and state evidence gaps clearly."
             },
-            {
-                "role": "user",
-                "content": (
-                    "Customer's exact research question: " + topic + "\n\n"
-                    "Verified and publisher-reported source context (JSON):\n"
-                    + json.dumps(context, sort_keys=True, ensure_ascii=False)
-                    + "\n\nAnswer the exact question above. Cover every requested dimension, in "
-                    "the order that makes sense for that question. Use only evidence in the context. "
-                    "When a requested dimension has no data, state that clearly and say what data would "
-                    "be needed; do not replace it with an unrelated metric. Distinguish measured data, "
-                    "publisher-reported claims and analytical judgement. Do not reuse a generic DeFi/TVL "
-                    "answer unless the question explicitly asks about DeFi or protocol TVL."
-                ),
+            {"role": "user", "content":
+                "Customer's exact research question: " + topic + "\n\n"
+                "Verified and publisher-reported source context (JSON):\n"
+                + json.dumps(context, sort_keys=True, ensure_ascii=False)
+                + "\n\nAnswer the exact question. Cover each requested dimension and distinguish measured "
+                "data, publisher-reported claims and analytical judgement."
             },
         ],
     }
@@ -562,10 +600,7 @@ async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | No
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 base_url + "/chat/completions",
-                headers={
-                    "Authorization": "Bearer " + api_key,
-                    "Content-Type": "application/json",
-                },
+                headers={"Authorization": "Bearer " + near_key, "Content-Type": "application/json"},
                 json=payload,
             )
             response.raise_for_status()
@@ -574,19 +609,14 @@ async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | No
         if not isinstance(content, str) or not content.strip():
             raise ValueError("NEAR AI Cloud returned an empty analysis.")
         return content.strip(), {
-            "status": "completed",
-            "provider": "near_ai_cloud",
-            "model": result.get("model", model),
-            "usage": result.get("usage"),
+            "status": "completed", "provider": "near_ai_cloud",
+            "model": result.get("model", model), "usage": result.get("usage"),
         }
     except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
         return None, {
-            "status": "unavailable_fallback_used",
-            "provider": "near_ai_cloud",
-            "model": model,
-            "error": str(exc)[:240],
+            "status": "unavailable_fallback_used", "provider": "near_ai_cloud",
+            "model": model, "error": str(exc)[:240],
         }
-
 
 async def generate_live_report(
     topic: str, default_chain: str = "Near"
@@ -648,7 +678,7 @@ async def generate_live_report(
         "near_agent_projects_github": projects,
     }
     ai_analysis, ai_meta = await generate_near_ai_analysis(topic, research_context)
-    data_mode = "near_ai_live" if ai_analysis else "multi_source_live"
+    data_mode = (ai_meta.get("provider", "ai") + "_live") if ai_analysis else "multi_source_live"
 
     chain = chain_context["chain"]
     retrieved = datetime.now(timezone.utc).isoformat()
@@ -673,7 +703,7 @@ async def generate_live_report(
     if not official.get("near_intents_documented_facts"):
         quality_warnings.append("Official NEAR Intents documentation could not be retrieved during this run.")
     if ai_status != "completed":
-        quality_warnings.append("NEAR AI Cloud analysis did not run; deterministic source summary used.")
+        quality_warnings.append(f"{ai_meta.get('provider', 'AI provider')} analysis did not run; deterministic source summary used.")
 
     excluded_count = chain_context.get("excluded_protocol_count", 0)
     excluded_section = _excluded_protocol_lines(chain_context)
@@ -700,10 +730,10 @@ async def generate_live_report(
         else "unavailable; deterministic fallback used"
     )
     ai_status_banner = (
-        f"> **NEAR AI Cloud:** {ai_status_note}.\n"
+        f"> **AI provider ({ai_meta.get('provider', 'unknown')}):** {ai_status_note}.\n"
         if ai_status == "completed"
         else (
-            "> **AI analysis notice:** NEAR AI Cloud did not return an analysis for this order. "
+            f"> **AI analysis notice:** {ai_meta.get('provider', 'AI provider')} did not return an analysis for this order. "
             "The answer below is a deterministic, source-driven fallback, not a model-generated response. "
             "Some requested areas may remain unanswered. Check the audit record for the failure detail.\n"
         )

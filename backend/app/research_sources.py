@@ -24,6 +24,8 @@ NEAR_INTENTS_QUICKSTART_URL = (
 )
 NEAR_INTENTS_EXPLORER_URL = "https://explorer.near-intents.org/api/v0/transactions"
 NEAR_AI_DEFAULT_MODEL = "z-ai/glm-5.3-flash"
+GEMINI_DEFAULT_MODEL = "gemini-3.8-flash"
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 EXCLUDED_TVL_CATEGORIES = {
     "cex", "centralized exchange", "bridge", "liquid staking", "staking",
