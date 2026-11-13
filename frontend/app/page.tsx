@@ -213,6 +213,7 @@ export default function Home() {
 
   async function signInWithNear() {
     setAuthBusy(true);
+    let finishTimer: ReturnType<typeof setTimeout> | undefined;
     setError("");
     setAuthMessage("Preparing a one-time NEAR sign-in request...");
     try {
@@ -222,7 +223,6 @@ export default function Home() {
       });
       const { NearConnector } = await import("@hot-labs/near-connect");
       const connector = new NearConnector({ features: { signMessage: true } });
-      let finishTimer: ReturnType<typeof setTimeout> | undefined;
       const signedEventPromise = new Promise<any>((resolve, reject) => {
         connector.on("wallet:signInAndSignMessage", (event: any) => resolve(event));
         finishTimer = setTimeout(() => reject(new Error("Wallet sign-in timed out. Please try again.")), 120000);
@@ -266,6 +266,7 @@ export default function Home() {
       setError(err instanceof Error ? err.message : "NEAR wallet sign-in failed. Please try again.");
       setAuthMessage("");
     } finally {
+      if (finishTimer) clearTimeout(finishTimer);
       setAuthBusy(false);
     }
   }
@@ -397,7 +398,7 @@ export default function Home() {
             <h1>Business overview</h1>
           </div>
           <div className="top-actions">
-            <span className="admin-email">{authUser.email}</span><button className="signout-button" onClick={() => void signOut()}>Sign out</button>
+            <span className="admin-email">{authUser.account_id}</span><button className="signout-button" onClick={() => void signOut()}>Sign out</button>
             <span className="demo-pill"><span /> {dashboard?.research_mode === "live" ? "LIVE RESEARCH" : "DEMO MODE"}</span>
             <button className="refresh-button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
           </div>
