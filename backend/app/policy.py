@@ -39,8 +39,12 @@ def estimated_inference_cost(rules: dict) -> float:
     return DEMO_INFERENCE_COST_USD
 
 
-def enforce_order_policy(db: Session, price_usd: float) -> tuple[dict, float]:
+def enforce_order_policy(
+    db: Session, price_usd: float, research_mode_override: str | None = None
+) -> tuple[dict, float]:
     rules = current_rules()
+    if research_mode_override:
+        rules = {**rules, "research": {**(rules.get("research") or {}), "mode": research_mode_override}}
     limits = rules["limits"]
     safety = rules["safety"]
     if safety.get("kill_switch", True):
