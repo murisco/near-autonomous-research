@@ -417,7 +417,7 @@ def parse_official_hub_metrics(text: str) -> list[dict]:
             metrics.append({
                 "metric": label,
                 "publisher_displayed_value": re.sub(r"\s+", "", match.group(1)),
-                "classification": "Publisher-reported NEAR headline; methodology and underlying query not independently verified.",
+                "classification": "publisher-reported NEAR headline; methodology and underlying query not independently verified.",
             })
     return metrics
 
