@@ -7,6 +7,7 @@ from backend.app.research_sources import (
     parse_intents_home,
     parse_official_hub_metrics,
     parse_stablecoin_chain_assets,
+    select_chain_from_topic,
     summarise_daily_rows,
 )
 
@@ -188,3 +189,17 @@ def test_stablecoin_parser_reads_chain_circulating_and_historical_comparisons():
     assert rows[0]["change_1d_percent"] == 11.11
     assert rows[0]["change_7d_percent"] == 25.0
     assert rows[0]["change_30d_percent"] == 100.0
+
+
+
+def test_chain_selector_does_not_match_stable_inside_stablecoin():
+    names = ["Stable", "Near", "Ethereum"]
+
+    selected = select_chain_from_topic(
+        "Evaluate the NEAR ecosystem, including stablecoin supply and liquidity.",
+        names,
+        "Near",
+    )
+
+    assert selected == "Near"
+    assert select_chain_from_topic("Analyse Stable chain TVL", names, "Near") == "Stable"
