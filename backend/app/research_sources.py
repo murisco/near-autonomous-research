@@ -327,6 +327,42 @@ def _stablecoin_usd_value(value: Any) -> float | None:
     return as_float(value)
 
 
+def parse_stablecoin_chain_assets(raw_assets: list[dict], chain: str) -> list[dict]:
+    """Extract per-asset circulating amounts for one chain from DefiLlama's catalogue."""
+    asset_rows = []
+    target = chain.casefold()
+    for asset in raw_assets:
+        if not isinstance(asset, dict):
+            continue
+        circulating = asset.get("chainCirculating") or {}
+        matching = next(
+            (value for key, value in circulating.items() if str(key).casefold() == target),
+            None,
+        ) if isinstance(circulating, dict) else None
+        if not isinstance(matching, dict):
+            continue
+        current_value = _stablecoin_usd_value(matching.get("circulating", matching.get("current")))
+        if current_value is None or current_value <= 0:
+            continue
+        previous = {
+            "day": _stablecoin_usd_value(matching.get("circulatingPrevDay")),
+            "week": _stablecoin_usd_value(matching.get("circulatingPrevWeek")),
+            "month": _stablecoin_usd_value(matching.get("circulatingPrevMonth")),
+        }
+        def change_from(value):
+            return round((current_value / value - 1) * 100, 2) if value and value > 0 else None
+        asset_rows.append({
+            "name": asset.get("name") or asset.get("symbol") or "Unknown stablecoin",
+            "symbol": asset.get("symbol"),
+            "peg_type": asset.get("pegType"),
+            "current_supply_usd": round(current_value, 2),
+            "change_1d_percent": change_from(previous["day"]),
+            "change_7d_percent": change_from(previous["week"]),
+            "change_30d_percent": change_from(previous["month"]),
+        })
+    return sorted(asset_rows, key=lambda item: item["current_supply_usd"], reverse=True)
+
+
 async def collect_stablecoin_context(chain: str = "Near") -> dict:
     """Collect chain-level stablecoin history and per-asset circulating supply from DefiLlama."""
     headers = {"User-Agent": "MERIDIAN-Autonomous-Research/0.4"}
@@ -379,37 +415,7 @@ async def collect_stablecoin_context(chain: str = "Near") -> dict:
     else:
         raw_assets = []
 
-    asset_rows = []
-    target = chain.casefold()
-    for asset in raw_assets:
-        if not isinstance(asset, dict):
-            continue
-        circulating = asset.get("chainCirculating") or {}
-        matching = next((value for key, value in circulating.items() if str(key).casefold() == target), None) if isinstance(circulating, dict) else None
-        if matching is None:
-            chain_names = asset.get("chains") or []
-            if not any(str(value).casefold() == target for value in chain_names):
-                continue
-            continue
-        current_block = matching.get("circulating", matching.get("current")) if isinstance(matching, dict) else matching
-        current_value = _stablecoin_usd_value(current_block)
-        if current_value is None or current_value <= 0:
-            continue
-        prev_day = _stablecoin_usd_value(matching.get("circulatingPrevDay")) if isinstance(matching, dict) else None
-        prev_week = _stablecoin_usd_value(matching.get("circulatingPrevWeek")) if isinstance(matching, dict) else None
-        prev_month = _stablecoin_usd_value(matching.get("circulatingPrevMonth")) if isinstance(matching, dict) else None
-        def change_from(previous):
-            return round((current_value / previous - 1) * 100, 2) if previous and previous > 0 else None
-        asset_rows.append({
-            "name": asset.get("name") or asset.get("symbol") or "Unknown stablecoin",
-            "symbol": asset.get("symbol"),
-            "peg_type": asset.get("pegType"),
-            "current_supply_usd": round(current_value, 2),
-            "change_1d_percent": change_from(prev_day),
-            "change_7d_percent": change_from(prev_week),
-            "change_30d_percent": change_from(prev_month),
-        })
-    asset_rows.sort(key=lambda item: item["current_supply_usd"], reverse=True)
+    asset_rows = parse_stablecoin_chain_assets(raw_assets, chain)
     reconstructed_total = sum(item["current_supply_usd"] for item in asset_rows) if asset_rows else None
     chart_total = latest["tvl"] if latest else None
     total = chart_total if chart_total is not None else reconstructed_total
