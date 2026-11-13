@@ -805,8 +805,14 @@ async def collect_near_agent_projects(limit: int = 8) -> dict:
                 if isinstance(response, Exception):
                     search_errors += 1
                     continue
-                response.raise_for_status()
-                payload = response.json()
+                if response.status_code >= 400:
+                    search_errors += 1
+                    continue
+                try:
+                    payload = response.json()
+                except ValueError:
+                    search_errors += 1
+                    continue
                 total_count += int(payload.get("total_count", 0) or 0)
                 for item in payload.get("items", []):
                     if isinstance(item, dict) and item.get("full_name"):
