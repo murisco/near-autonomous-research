@@ -24,3 +24,56 @@ jobs:
         run: python -m compileall -q backend
       - name: Run tests
         run: PYTHONPATH=. pytest -q
+      - name: Smoke-test live DefiLlama NEAR stablecoin endpoints
+        run: |
+          python - <<'PY'
+          import httpx
+
+          bases = ("https://api.llama.fi", "https://stablecoins.llama.fi")
+          checks = {
+              "chain history": (
+                  "/stablecoincharts/Near",
+                  lambda data: isinstance(data, list) and any(
+                      isinstance(row, dict) and row.get("date") is not None
+                      and row.get("totalCirculating", row.get("totalCirculatingUSD")) is not None
+                      for row in data
+                  ),
+              ),
+              "stablecoin catalogue": (
+                  "/stablecoins?includePrices=true",
+                  lambda data: isinstance(data, dict) and any(
+                      isinstance(asset, dict)
+                      and any(str(chain).casefold() == "near" for chain in (asset.get("chainCirculating") or {}))
+                      for asset in (data.get("peggedAssets") or [])
+                  ),
+              ),
+              "chain aggregate": (
+                  "/stablecoinchains",
+                  lambda data: isinstance(data, list) and any(
+                      isinstance(row, dict) and str(row.get("name", "")).casefold() == "near"
+                      and row.get("totalCirculating", row.get("totalCirculatingUSD")) is not None
+                      for row in data
+                  ),
+              ),
+          }
+
+          with httpx.Client(timeout=20.0, follow_redirects=True) as client:
+              for label, (path, valid) in checks.items():
+                  errors = []
+                  for base in bases:
+                      url = base + path
+                      try:
+                          response = client.get(url)
+                          if response.status_code >= 400:
+                              errors.append(f"{base}: HTTP {response.status_code}")
+                              continue
+                          payload = response.json()
+                          if valid(payload):
+                              print(f"PASS {label}: {base}{path}")
+                              break
+                          errors.append(f"{base}: unexpected or empty NEAR payload")
+                      except (httpx.HTTPError, ValueError) as exc:
+                          errors.append(f"{base}: {type(exc).__name__}")
+                  else:
+                      raise SystemExit(f"FAIL {label}: " + "; ".join(errors))
+          PY
