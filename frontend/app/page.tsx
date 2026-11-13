@@ -30,6 +30,22 @@ type Order = {
 };
 
 type Report = { id: string; title: string; markdown: string; data_mode: string };
+type PaymentQuote = {
+  status: string;
+  provider?: string;
+  network?: string;
+  reason?: string;
+  note?: string;
+  no_deposit_address: boolean;
+  settlement: boolean;
+  quote?: {
+    amount_in_formatted?: string;
+    amount_in_usd?: string;
+    amount_out_formatted?: string;
+    amount_out_usd?: string;
+    time_estimate_seconds?: number;
+  };
+};
 type LedgerEvent = {
   id: number;
   order_id: string | null;
@@ -81,7 +97,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [activeTab, setActiveTab] = useState<"orders" | "ledger">("orders");
-  const [selectedReport, setSelectedReport] = useState<Report | null>(null);
+  const [selectedReport, setSelectedReport] = useState<Report | null>(null);\n  const [paymentQuote, setPaymentQuote] = useState<PaymentQuote | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -254,6 +270,28 @@ export default function Home() {
               <button className="close-button" onClick={() => setSelectedReport(null)}>Close ×</button>
             </div>
             <pre className="report-content">{selectedReport.markdown}</pre>
+          </section>
+        )}
+
+        {paymentQuote && (
+          <section className="panel payment-panel">
+            <div className="panel-heading">
+              <div>
+                <div className="eyebrow">PAYMENT ROUTE · TESTNET PREVIEW</div>
+                <h2>Tidepool swap quote</h2>
+              </div>
+              <span className="mini-tag">{paymentQuote.status === "dry_quote_returned" ? "DRY QUOTE" : "FALLBACK"}</span>
+            </div>
+            {paymentQuote.quote ? (
+              <div className="quote-metrics">
+                <div><span>WNEAR input estimate</span><strong>{paymentQuote.quote.amount_in_formatted ?? "—"} WNEAR</strong><small>{paymentQuote.quote.amount_in_usd ? "$" + paymentQuote.quote.amount_in_usd : ""}</small></div>
+                <div><span>USDC output target</span><strong>{paymentQuote.quote.amount_out_formatted ?? "—"} USDC</strong><small>{paymentQuote.quote.amount_out_usd ? "$" + paymentQuote.quote.amount_out_usd : ""}</small></div>
+                <div><span>Estimated route time</span><strong>{paymentQuote.quote.time_estimate_seconds ?? "—"} sec</strong></div>
+              </div>
+            ) : (
+              <p className="panel-subtitle">{paymentQuote.reason || "The sandbox did not return a quote. The order remains unpaid."}</p>
+            )}
+            <p className="form-footnote">{paymentQuote.note || "Community sandbox quote only. No deposit address, transaction, or settlement was created. This is not the official NEAR Intents testnet."}</p>
           </section>
         )}
 
