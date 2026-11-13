@@ -205,18 +205,25 @@ def analyse_tvl_history(current_tvl: float, history: list[dict], days: int = 30)
 
 
 def select_chain_from_topic(topic: str, chain_names: list[str], default_chain: str = "Near") -> str | None:
-    """Match chain names as whole phrases, never substrings inside ordinary words."""
+    """Select the requested chain without treating a negated comparison as the target."""
+    topic_text = topic or ""
     mentioned = [
         name for name in chain_names
         if re.search(
             r"(?<![A-Za-z0-9])" + re.escape(name) + r"(?![A-Za-z0-9])",
-            topic or "",
+            topic_text,
             flags=re.IGNORECASE,
         )
     ]
+    default_match = next(
+        (name for name in chain_names if name.casefold() == default_chain.casefold()),
+        None,
+    )
+    if default_match and any(name.casefold() == default_match.casefold() for name in mentioned):
+        return default_match
     if mentioned:
         return sorted(mentioned, key=len, reverse=True)[0]
-    return next((name for name in chain_names if name.casefold() == default_chain.casefold()), None)
+    return default_match
 
 
 async def collect_defillama_context(topic: str, default_chain: str = "Near") -> dict:
