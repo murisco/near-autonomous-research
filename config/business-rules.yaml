@@ -1,5 +1,5 @@
 # Human-editable business policy.
-# Example values for local demo only; review before any live operation.
+# Demo mode only. Review all values before any live operation.
 currency: USD
 
 limits:
@@ -11,7 +11,8 @@ revenue_split:
   contributors_percent: 20
 
 safety:
-  kill_switch: true
+  # Allows the local simulated research workflow. Does not authorize payments.
+  kill_switch: false
   payments_enabled: false
   mainnet_execution_enabled: false
   require_human_approval_for_payouts: true
