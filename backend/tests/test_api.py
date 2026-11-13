@@ -267,3 +267,26 @@ def test_near_wallet_login_rejects_non_full_access_key(monkeypatch):
         )
         assert response.status_code == 401
         assert "full-access key" in response.json()["detail"]
+
+
+def test_nep413_signature_verifies_exact_message_and_recipient():
+    import base64
+    import secrets
+
+    import base58
+    from nacl.signing import SigningKey
+
+    from backend.app.near_auth import nep413_signing_hash, verify_nep413_signature
+
+    signing_key = SigningKey.generate()
+    nonce = secrets.token_bytes(32)
+    nonce_b64 = base64.b64encode(nonce).decode("ascii")
+    message = "Sign in to MERIDIAN (identity only)."
+    recipient = "meridian-dashboard.up.railway.app"
+    digest = nep413_signing_hash(message, nonce, recipient)
+    signature = base64.b64encode(signing_key.sign(digest).signature).decode("ascii")
+    public_key = "ed25519:" + base58.b58encode(bytes(signing_key.verify_key)).decode("ascii")
+
+    assert verify_nep413_signature(message, nonce_b64, recipient, public_key, signature)
+    assert not verify_nep413_signature(message + " altered", nonce_b64, recipient, public_key, signature)
+    assert not verify_nep413_signature(message, nonce_b64, "another-site.example", public_key, signature)
