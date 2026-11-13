@@ -14,7 +14,7 @@ from .config import load_business_rules
 from .database import Base, engine, get_db
 from .models import AuditEvent, Order, Report
 from .policy import PolicyViolation, enforce_order_policy
-from .research import generate_demo_report
+from .research import ResearchSourceError, generate_report
 from .schemas import DemoRunRequest, OrderCreate
 
 app = FastAPI(
@@ -80,7 +80,7 @@ def serialize_order(order: Order, include_report: bool = False) -> dict:
     return payload
 
 
-def process_order(db: Session, request: OrderCreate) -> dict:
+async def process_order(db: Session, request: OrderCreate) -> dict:
     try:
         rules, inference_cost = enforce_order_policy(db, request.price_usd)
     except PolicyViolation as exc:
@@ -119,9 +119,19 @@ def process_order(db: Session, request: OrderCreate) -> dict:
             "daily_inference_limit_usd": float(rules["limits"]["max_inference_spend_per_day"]),
         },
     )
-    add_event(db, order_id, "demo_research_started", {"provider": "synthetic_demo"})
+    try:
+        title, markdown, data_mode, research_meta = await generate_report(request.topic, rules)
+    except ResearchSourceError as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    title, markdown = generate_demo_report(request.topic)
+    order.data_mode = data_mode
+    add_event(
+        db,
+        order_id,
+        "research_started",
+        {"provider": research_meta.get("provider"), "data_mode": data_mode},
+    )
     profit = max(0.0, request.price_usd - inference_cost)
     operator_share = round(profit * int(split["operator_percent"]) / 100, 2)
     contributor_share = round(profit - operator_share, 2)
@@ -131,7 +141,7 @@ def process_order(db: Session, request: OrderCreate) -> dict:
         order_id=order_id,
         title=title,
         markdown=markdown,
-        data_mode="synthetic_demo",
+        data_mode=data_mode,
     )
     order.projected_profit_usd = profit
     order.operator_share_usd = operator_share
@@ -143,8 +153,9 @@ def process_order(db: Session, request: OrderCreate) -> dict:
         db,
         order_id,
         "demo_report_generated",
-        {"report_id": report_id, "data_mode": "synthetic_demo"},
+        {"report_id": report_id, "data_mode": data_mode},
     )
+    add_event(db, order_id, "research_sources_recorded", research_meta)
     add_event(
         db,
         order_id,
@@ -228,14 +239,14 @@ def dashboard(db: Session = Depends(get_db)) -> dict:
 
 
 @app.post("/api/orders")
-def create_order(request: OrderCreate, db: Session = Depends(get_db)) -> dict:
-    return process_order(db, request)
+async def create_order(request: OrderCreate, db: Session = Depends(get_db)) -> dict:
+    return await process_order(db, request)
 
 
 @app.post("/api/demo/run")
-def run_demo(request: DemoRunRequest, db: Session = Depends(get_db)) -> dict:
+async def run_demo(request: DemoRunRequest, db: Session = Depends(get_db)) -> dict:
     demo_request = OrderCreate(topic=request.topic, price_usd=10.0)
-    return process_order(db, demo_request)
+    return await process_order(db, demo_request)
 
 
 @app.get("/api/orders")
