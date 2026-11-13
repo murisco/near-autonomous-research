@@ -104,7 +104,7 @@ tr:last-child td{border-bottom:0}
 .quote-metrics>div{display:flex;flex-direction:column;gap:5px;padding:12px;background:#f8fafb;border:1px solid #edf1f4;border-radius:8px}
 .quote-metrics span,.quote-metrics small{font-size:9px;color:#8793a1}
 .quote-metrics strong{font:700 14px Manrope;color:#253747}
-.report-panel{margin-bottom:17px}
+.report-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}.download-button{border:1px solid #dce4e8;background:#f7fafb;color:#375465;border-radius:6px;padding:8px 11px;font-size:10px;font-weight:700;cursor:pointer}.download-button:hover{background:#eef4f6}.report-panel{margin-bottom:17px}
 .report-panel h2{max-width:760px;line-height:1.4}
 .report-content{white-space:pre-wrap;overflow-wrap:anywhere;background:#f8fafb;border:1px solid #edf1f4;padding:18px;border-radius:8px;font:11px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;color:#526172;max-height:460px;overflow:auto;margin:17px 0 0}
 .alert{padding:11px 14px;border-radius:8px;margin-bottom:14px;font-size:11px}
