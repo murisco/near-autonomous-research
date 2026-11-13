@@ -818,9 +818,24 @@ async def collect_near_agent_projects(limit: int = 8) -> dict:
                     if isinstance(item, dict) and item.get("full_name"):
                         candidates[item["full_name"].casefold()] = item
 
+            def candidate_priority(item):
+                identity = " ".join([
+                    str(item.get("full_name") or ""),
+                    str(item.get("name") or ""),
+                    str(item.get("description") or ""),
+                ]).lower()
+                score = 0
+                if re.search(r"\\bnear\\b", identity):
+                    score += 2
+                if re.search(r"\\b(agent|agents|agentic|swarm)\\b", identity):
+                    score += 3
+                if re.search(r"\\b(autonomous|hackathon|marketplace|onchain)\\b", identity):
+                    score += 1
+                return (score, item.get("pushed_at") or item.get("updated_at") or "")
+
             selected = sorted(
                 candidates.values(),
-                key=lambda item: item.get("pushed_at") or item.get("updated_at") or "",
+                key=candidate_priority,
                 reverse=True,
             )[:max(1, min(limit, 10))]
 
