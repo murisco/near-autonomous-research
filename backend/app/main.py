@@ -303,7 +303,25 @@ def get_order(order_id: str, db: Session = Depends(get_db)) -> dict:
     )
     if not order:
         raise HTTPException(status_code=404, detail="Order not found.")
-    return serialize_order(order, include_report=True)
+    payload = serialize_order(order, include_report=True)
+    quote_event = db.scalar(
+        select(AuditEvent)
+        .where(
+            AuditEvent.order_id == order_id,
+            AuditEvent.event_type.in_(
+                ["tidepool_sandbox_dry_quote_created", "simulated_payment_quote_created"]
+            ),
+        )
+        .order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
+        .limit(1)
+    )
+    if quote_event:
+        try:
+            quote_details = json.loads(quote_event.details_json)
+            payload["payment_quote"] = quote_details.get("payment_quote")
+        except (json.JSONDecodeError, AttributeError):
+            payload["payment_quote"] = None
+    return payload
 
 
 @app.get("/api/ledger")
