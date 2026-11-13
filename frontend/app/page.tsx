@@ -397,17 +397,18 @@ function Economics({ label, value }: { label: string; value: string }) {
 }
 
 function inlineMarkdown(value: string): ReactNode[] {
-  const parts = value.split(/(\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\)|`[^`]+`)/g);
+  const parts = value.split(/(\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\))/g);
   return parts.map((part, index) => {
     if (part.startsWith("**") && part.endsWith("**")) {
       return <strong key={index}>{part.slice(2, -2)}</strong>;
     }
-    const link = part.match(/^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/);
-    if (link) {
-      return <a key={index} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>;
-    }
-    if (part.startsWith("`") && part.endsWith("`")) {
-      return <code key={index}>{part.slice(1, -1)}</code>;
+    const linkOpen = part.indexOf("](");
+    if (part.startsWith("[") && linkOpen > 1 && part.endsWith(")")) {
+      const label = part.slice(1, linkOpen);
+      const href = part.slice(linkOpen + 2, -1);
+      if (href.startsWith("https://") || href.startsWith("http://")) {
+        return <a key={index} href={href} target="_blank" rel="noreferrer">{label}</a>;
+      }
     }
     return part;
   });
