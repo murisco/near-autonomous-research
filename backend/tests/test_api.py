@@ -46,3 +46,24 @@ def test_health_and_safety_rules():
         assert rules["safety"]["payments_enabled"] is False
         assert rules["safety"]["mainnet_execution_enabled"] is False
         assert rules["safety"]["kill_switch"] is False
+
+
+
+def test_live_research_failure_is_preserved_in_audit_ledger(monkeypatch):
+    from backend.app import main as main_module
+
+    async def fail_research(topic, rules):
+        raise main_module.ResearchSourceError("Public data provider unavailable.")
+
+    monkeypatch.setattr(main_module, "generate_report", fail_research)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/orders",
+            json={"topic": "Assess NEAR ecosystem activity", "price_usd": 10},
+        )
+        assert response.status_code == 503
+        ledger = client.get("/api/ledger").json()
+        failed = [event for event in ledger["items"] if event["event_type"] == "research_failed"]
+        assert failed
+        assert failed[0]["details"]["reason"] == "Public data provider unavailable."
