@@ -825,11 +825,11 @@ async def collect_near_agent_projects(limit: int = 8) -> dict:
                     str(item.get("description") or ""),
                 ]).lower()
                 score = 0
-                if re.search(r"\\bnear\\b", identity):
+                if re.search(r"\bnear\b", identity):
                     score += 2
-                if re.search(r"\\b(agent|agents|agentic|swarm)\\b", identity):
+                if re.search(r"\b(agent|agents|agentic|swarm)\b", identity):
                     score += 3
-                if re.search(r"\\b(autonomous|hackathon|marketplace|onchain)\\b", identity):
+                if re.search(r"\b(autonomous|hackathon|marketplace|onchain)\b", identity):
                     score += 1
                 return (score, item.get("pushed_at") or item.get("updated_at") or "")
 
