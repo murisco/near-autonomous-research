@@ -785,12 +785,17 @@ async def collect_near_agent_projects(limit: int = 8) -> dict:
         "User-Agent": "MERIDIAN-Autonomous-Research/0.5",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    queries = ['near agent in:readme', 'near autonomous agent in:readme']
+    queries = [
+        '"NEAR Protocol" agent in:readme',
+        '"NEAR testnet" agent in:readme',
+        '"near-sdk" agent in:readme',
+        'NEAR hackathon agent 2026 in:readme',
+    ]
     timeout = httpx.Timeout(18.0, connect=7.0)
     try:
         async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
             searches = await asyncio.gather(
-                *(client.get(query_url, params={"q": query, "sort": "updated", "order": "desc", "per_page": 10}) for query in queries),
+                *(client.get(query_url, params={"q": query, "sort": "updated", "order": "desc", "per_page": 12}) for query in queries),
                 return_exceptions=True,
             )
             candidates = {}
@@ -870,14 +875,27 @@ async def collect_near_agent_projects(limit: int = 8) -> dict:
                 near_hits = [pattern for pattern in near_patterns if re.search(pattern, combined)]
                 agent_hits = [pattern for pattern in agent_patterns if re.search(pattern, combined)]
                 infra_hits = [pattern for pattern in infrastructure_patterns if re.search(pattern, combined)]
-                if readme_status == "inspected" and near_hits and agent_hits:
-                    if infra_hits and not re.search(r"\bautonomous agent\b|\bai agent\b|\bmulti-agent\b|\bagentic\b", combined):
-                        classification = "agent_infrastructure"
-                    else:
-                        classification = "autonomous_ai_agent_candidate"
+                explicit_near_integration = any(
+                    re.search(pattern, combined)
+                    for pattern in (
+                        r"near protocol", r"near blockchain", r"near[-_]sdk",
+                        r"near-api-js", r"@near-js", r"near testnet", r"near mainnet",
+                        r"\bnep[- ]\d+\b", r"market\.near\.ai", r"near intents",
+                    )
+                )
+                strong_agent_evidence = any(
+                    re.search(pattern, combined)
+                    for pattern in (
+                        r"\bautonomous ai agent\b", r"\bautonomous agent\b",
+                        r"\bai agent\b", r"\bagent swarm\b",
+                        r"\bagent marketplace\b", r"\bagent market\b",
+                    )
+                )
+                if readme_status == "inspected" and explicit_near_integration and strong_agent_evidence:
+                    classification = "autonomous_ai_agent_candidate"
                 elif readme_status == "inspected" and near_hits and infra_hits:
                     classification = "agent_infrastructure"
-                elif readme_status == "inspected" and near_hits:
+                elif readme_status == "inspected" and explicit_near_integration:
                     classification = "related_near_ecosystem_project_not_verified_as_agent"
                 else:
                     classification = "unverified_candidate"
