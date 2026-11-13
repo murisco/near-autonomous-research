@@ -336,12 +336,12 @@ async def collect_defillama_context(topic: str, default_chain: str = "Near") -> 
     }
 
 
-STABLECOINS_BASE = DEFILLAMA_BASE
+STABLECOINS_BASE = "https://stablecoins.llama.fi"
 
 
 def _stablecoin_usd_value(value: Any) -> float | None:
     if isinstance(value, dict):
-        for key in ("peggedUSD", "peggedUsd", "usd", "value"):
+        for key in ("peggedUSD", "peggedUsd", "totalCirculatingUSD", "usd", "value"):
             parsed = as_float(value.get(key))
             if parsed is not None:
                 return parsed
@@ -391,9 +391,11 @@ def parse_stablecoin_chain_aggregate(rows: list[dict], chain: str) -> float | No
     for row in rows:
         if not isinstance(row, dict) or str(row.get("name") or "").casefold() != target:
             continue
-        return _stablecoin_usd_value(
+        value = _stablecoin_usd_value(
             row.get("totalCirculatingUSD", row.get("totalCirculatingUsd", row.get("totalCirculating")))
         )
+        if value is not None:
+            return value
     return None
 
 
