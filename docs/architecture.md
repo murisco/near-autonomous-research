@@ -38,7 +38,7 @@ NEAR AI Cloud uses an OpenAI-compatible API. The current adapter is optional and
 
 NEAR Intents production 1Click is mainnet-only according to its official documentation. Tidepool provides a community-operated, 1Click-compatible NEAR testnet sandbox using valueless test tokens; it is not affiliated with NEAR, Defuse or 1Click. It may be used for isolated testnet experiments, but must not be represented as the official NEAR Intents testnet. OutLayer's testnet wallet APIs support account and direct NEAR operations, but its documentation says its Intents-dependent endpoints return HTTP 503 on testnet. These products therefore do not yet provide MERIDIAN with a single official end-to-end testnet path for Intents payments and payouts.
 
-Until customer payment and wallet custody are configured and tested safely, payment quote events are simulation-only. They have no deposit address and do not initiate a transfer.
+Live research orders may request a Tidepool dry quote for a WNEAR-to-USDC route. The response is labelled as a community sandbox quote, its signature is not treated as verified, and the dry flag prevents a deposit address from being returned. No transfer is initiated. If the sandbox is unavailable, the system records a simulation fallback. This does not represent official NEAR Intents testnet or production settlement.
 
 ## Persistence and auditability
 
