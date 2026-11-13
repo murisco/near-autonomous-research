@@ -6,6 +6,7 @@ from backend.app.research_sources import (
     historical_change,
     parse_intents_home,
     parse_official_hub_metrics,
+    parse_stablecoin_chain_assets,
     summarise_daily_rows,
 )
 
@@ -78,10 +79,11 @@ def test_historical_change_uses_calendar_time_not_row_offsets():
 
 
 def test_daily_activity_parser_recognises_metrics_and_does_not_guess():
+    today = datetime.now(timezone.utc).date()
     rows = [
-        {"date": "2026-11-10", "txns": "100"},
-        {"date": "2026-11-11", "txns": "110"},
-        {"date": "2026-11-12", "txns": "120"},
+        {"date": (today - timedelta(days=3)).isoformat(), "txns": "100"},
+        {"date": (today - timedelta(days=2)).isoformat(), "txns": "110"},
+        {"date": (today - timedelta(days=1)).isoformat(), "txns": "120"},
     ]
     result = summarise_daily_rows(rows, ("transactions", "txns"), "daily transactions")
     assert result["status"] == "available"
@@ -89,12 +91,11 @@ def test_daily_activity_parser_recognises_metrics_and_does_not_guess():
     assert result["source_field"] == "txns"
 
     unavailable = summarise_daily_rows(
-        [{"date": "2026-11-12", "foo": 12}],
+        [{"date": (today - timedelta(days=1)).isoformat(), "foo": 12}],
         ("transactions", "txns"),
         "daily transactions",
     )
     assert unavailable["status"] == "unavailable"
-
 
 def test_official_publisher_metrics_are_marked_as_publisher_claims():
     metrics = parse_official_hub_metrics(
@@ -150,3 +151,40 @@ def test_tvl_anomaly_check_flags_large_daily_move_and_current_history_divergence
     assert result["current_vs_latest_history_percent"] > 10
     assert any("single approximately daily TVL move exceeded 25%" in item for item in result["warnings"])
     assert any("differs from the latest historical observation" in item for item in result["warnings"])
+
+
+
+def test_stablecoin_parser_reads_chain_circulating_and_historical_comparisons():
+    assets = [
+        {
+            "name": "Example USD",
+            "symbol": "EUSD",
+            "pegType": "peggedUSD",
+            "chainCirculating": {
+                "Near": {
+                    "circulating": {"peggedUSD": 1_000_000},
+                    "circulatingPrevDay": {"peggedUSD": 900_000},
+                    "circulatingPrevWeek": {"peggedUSD": 800_000},
+                    "circulatingPrevMonth": {"peggedUSD": 500_000},
+                }
+            },
+        },
+        {
+            "name": "Ethereum only",
+            "symbol": "ETHUSD",
+            "chainCirculating": {
+                "Ethereum": {
+                    "circulating": {"peggedUSD": 9_000_000},
+                }
+            },
+        },
+    ]
+
+    rows = parse_stablecoin_chain_assets(assets, "Near")
+
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "EUSD"
+    assert rows[0]["current_supply_usd"] == 1_000_000
+    assert rows[0]["change_1d_percent"] == 11.11
+    assert rows[0]["change_7d_percent"] == 25.0
+    assert rows[0]["change_30d_percent"] == 100.0
