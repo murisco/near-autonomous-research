@@ -363,12 +363,12 @@ async def collect_nearblocks_activity() -> dict:
 
     txn = summarise_daily_rows(
         _find_rows(txn_payload) if txn_payload is not None else [],
-        ("transactions", "txns", "txn_count", "total_txns", "total_transactions", "transaction_count", "count"),
+        ("transactions", "txns", "txn_count", "total_txns", "total_transactions", "transaction_count"),
         "daily transactions",
     )
     addresses = summarise_daily_rows(
         _find_rows(address_payload) if address_payload is not None else [],
-        ("active_addresses", "active_accounts", "unique_accounts", "unique_addresses", "accounts", "addresses"),
+        ("active_addresses", "active_accounts", "unique_accounts", "unique_addresses"),
         "daily active/unique addresses",
     )
     return {
@@ -417,7 +417,7 @@ def parse_official_hub_metrics(text: str) -> list[dict]:
             metrics.append({
                 "metric": label,
                 "publisher_displayed_value": re.sub(r"\s+", "", match.group(1)),
-                "classification": "NEAR-published headline; methodology and underlying query not independently verified.",
+                "classification": "Publisher-reported NEAR headline; methodology and underlying query not independently verified.",
             })
     return metrics
 
