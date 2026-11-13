@@ -118,7 +118,7 @@ export default function Home() {
         body: JSON.stringify({ topic, price_usd: Number(price) }),
       });
       setSelectedReport(result.report);
-      setNotice("Demo report generated. No payment was taken and no blockchain transaction was sent.");
+      setNotice(result.data_mode === "synthetic_demo" ? "Demo report generated. No payment was taken and no blockchain transaction was sent." : "Live-source research report generated. No payment was taken and no blockchain transaction was sent.");
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create this research order.");
@@ -146,10 +146,10 @@ export default function Home() {
     <main className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">N</div>
+          <div className="brand-mark">M</div>
           <div>
-            <div className="brand-name">NOVA</div>
-            <div className="brand-caption">RESEARCH BUSINESS</div>
+            <div className="brand-name">MERIDIAN</div>
+            <div className="brand-caption">AUTONOMOUS BUSINESS</div>
           </div>
         </div>
         <div className="workspace-label">WORKSPACE</div>
@@ -170,7 +170,7 @@ export default function Home() {
             <h1>Business overview</h1>
           </div>
           <div className="top-actions">
-            <span className="demo-pill"><span /> DEMO MODE</span>
+            <span className="demo-pill"><span /> {dashboard?.research_mode === "live" ? "LIVE RESEARCH" : "DEMO MODE"}</span>
             <button className="refresh-button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
           </div>
         </header>
@@ -214,9 +214,9 @@ export default function Home() {
                 <div className="price-hint">Minimum quote<br /><strong>{money(rules?.limits.minimum_report_price ?? 10)}</strong></div>
               </div>
               <button type="submit" className="primary-button" disabled={busy || loading}>
-                {busy ? <><span className="spinner" /> Generating report...</> : <>Generate demo report <span>↗</span></>}
+                {busy ? <><span className="spinner" /> Generating report...</> : <>Generate research report <span>↗</span></>}
               </button>
-              <p className="form-footnote">Uses synthetic demo data. No live chain queries, payments, or transactions.</p>
+              <p className="form-footnote">{dashboard?.research_mode === "live" ? "Uses live public chain TVL data. NEAR AI Cloud analysis is added when its API key is configured. No customer payment is collected." : "Uses clearly labelled synthetic demo data. No customer payment or blockchain transaction is made."}</p>
             </form>
           </section>
 
@@ -246,7 +246,7 @@ export default function Home() {
           <section className="panel report-panel">
             <div className="panel-heading">
               <div>
-                <div className="eyebrow">GENERATED OUTPUT · SYNTHETIC DEMO</div>
+                <div className="eyebrow">GENERATED OUTPUT · {selectedReport.data_mode.toUpperCase().replaceAll("_", " ")}</div>
                 <h2>{selectedReport.title}</h2>
               </div>
               <button className="close-button" onClick={() => setSelectedReport(null)}>Close ×</button>
@@ -300,7 +300,7 @@ export default function Home() {
         </section>
 
         <footer className="footer">
-          <span>NOVA · AUTONOMOUS ONCHAIN INTELLIGENCE</span>
+          <span>MERIDIAN · AUTONOMOUS RESEARCH BUSINESS</span>
           <span>DEMO MODE ONLY · NOT CONNECTED TO LIVE FUNDS</span>
         </footer>
       </section>
