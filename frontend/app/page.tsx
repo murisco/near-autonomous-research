@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useState } from "react";
 
 type DashboardData = {
   orders: number;
@@ -176,6 +176,14 @@ export default function Home() {
   const budgetUsed = dashboard
     ? Math.min(100, (dashboard.today_estimated_inference_spend_usd / Math.max(0.01, dashboard.today_inference_budget_usd)) * 100)
     : 0;
+  const evidenceMarker = "## Research evidence & methodology";
+  const evidenceIndex = selectedReport ? selectedReport.markdown.indexOf(evidenceMarker) : -1;
+  const customerMarkdown = selectedReport
+    ? (evidenceIndex >= 0 ? selectedReport.markdown.slice(0, evidenceIndex) : selectedReport.markdown)
+    : "";
+  const evidenceMarkdown = selectedReport && evidenceIndex >= 0
+    ? selectedReport.markdown.slice(evidenceIndex)
+    : "";
 
   return (
     <main className="shell">
@@ -287,7 +295,15 @@ export default function Home() {
               </div>
               <div className="report-actions"><button className="download-button" onClick={() => downloadReport(selectedReport)}>Download .md</button><button className="close-button" onClick={() => { setSelectedReport(null); setPaymentQuote(null); }}>Close ×</button></div>
             </div>
-            <pre className="report-content">{selectedReport.markdown}</pre>
+            <div className="report-content">
+              <MarkdownView markdown={customerMarkdown} />
+              {evidenceMarkdown && (
+                <details className="evidence-details">
+                  <summary>View full source data and methodology</summary>
+                  <div className="evidence-content"><MarkdownView markdown={evidenceMarkdown} /></div>
+                </details>
+              )}
+            </div>
           </section>
         )}
 
@@ -378,4 +394,95 @@ function Metric({ label, value, helper, icon }: { label: string; value: string; 
 
 function Economics({ label, value }: { label: string; value: string }) {
   return <div className="economics-row"><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function inlineMarkdown(value: string): ReactNode[] {
+  const parts = value.split(/(\\*\\*[^*]+\\*\\*|\\[[^\\]]+\\]\\([^)]+\\)|`[^`]+`)/g);
+  return parts.map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={index}>{part.slice(2, -2)}</strong>;
+    }
+    const link = part.match(/^\\[([^\\]]+)\\]\\((https?:\\/\\/[^)]+)\\)$/);
+    if (link) {
+      return <a key={index} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>;
+    }
+    if (part.startsWith("`") && part.endsWith("`")) {
+      return <code key={index}>{part.slice(1, -1)}</code>;
+    }
+    return part;
+  });
+}
+
+function MarkdownView({ markdown }: { markdown: string }) {
+  const lines = markdown.split(/\\r?\\n/);
+  const blocks: ReactNode[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index].trim();
+    if (!line) { index += 1; continue; }
+    if (line.startsWith("# ")) { index += 1; continue; }
+    if (/^---+$/.test(line)) { blocks.push(<hr key={index} />); index += 1; continue; }
+    const heading = line.match(/^(#{2,4})\\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length;
+      const content = inlineMarkdown(heading[2]);
+      blocks.push(level === 2 ? <h3 key={index}>{content}</h3> : level === 3 ? <h4 key={index}>{content}</h4> : <h5 key={index}>{content}</h5>);
+      index += 1;
+      continue;
+    }
+    if (line.startsWith("> ")) {
+      const quote: string[] = [];
+      while (index < lines.length && lines[index].trim().startsWith("> ")) {
+        quote.push(lines[index].trim().slice(2));
+        index += 1;
+      }
+      blocks.push(<blockquote key={index}>{quote.map((item, i) => <p key={i}>{inlineMarkdown(item)}</p>)}</blockquote>);
+      continue;
+    }
+    if (line.startsWith("|") && index + 1 < lines.length && /^\\|?\\s*:?-{3,}/.test(lines[index + 1].trim())) {
+      const cells = (value: string) => value.trim().replace(/^\\|/, "").replace(/\\|$/, "").split("|").map((cell) => cell.trim());
+      const header = cells(lines[index]);
+      index += 2;
+      const rows: string[][] = [];
+      while (index < lines.length && lines[index].trim().startsWith("|")) {
+        rows.push(cells(lines[index]));
+        index += 1;
+      }
+      blocks.push(
+        <div className="report-table-wrap" key={index}>
+          <table className="report-table">
+            <thead><tr>{header.map((cell, i) => <th key={i}>{inlineMarkdown(cell)}</th>)}</tr></thead>
+            <tbody>{rows.map((row, i) => <tr key={i}>{header.map((_, j) => <td key={j}>{inlineMarkdown(row[j] || "")}</td>)}</tr>)}</tbody>
+          </table>
+        </div>
+      );
+      continue;
+    }
+    if (/^[-*]\\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length && /^\\s*[-*]\\s+/.test(lines[index])) {
+        items.push(lines[index].trim().replace(/^[-*]\\s+/, ""));
+        index += 1;
+      }
+      blocks.push(<ul key={index}>{items.map((item, i) => <li key={i}>{inlineMarkdown(item)}</li>)}</ul>);
+      continue;
+    }
+    if (/^\\d+\\.\\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length && /^\\s*\\d+\\.\\s+/.test(lines[index])) {
+        items.push(lines[index].trim().replace(/^\\d+\\.\\s+/, ""));
+        index += 1;
+      }
+      blocks.push(<ol key={index}>{items.map((item, i) => <li key={i}>{inlineMarkdown(item)}</li>)}</ol>);
+      continue;
+    }
+    const paragraph = [line];
+    index += 1;
+    while (index < lines.length && lines[index].trim() && !/^(#{1,4}\\s|>|[-*]\\s|\\d+\\.\\s|\\|)/.test(lines[index].trim()) && !/^---+$/.test(lines[index].trim())) {
+      paragraph.push(lines[index].trim());
+      index += 1;
+    }
+    blocks.push(<p key={index}>{inlineMarkdown(paragraph.join(" "))}</p>);
+  }
+  return <div className="markdown-view">{blocks}</div>;
 }
