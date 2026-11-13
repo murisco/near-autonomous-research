@@ -21,7 +21,7 @@ def generate_demo_report(topic: str) -> tuple[str, str]:
     title = f"MERIDIAN Demo Research Brief: {topic[:75]}"
     body = f"""# {title}
 
-> **SYNTHETIC DEMO:** Generated on {generated_at}. This report contains no live blockchain queries, verified project metrics, or investment advice.
+> **DEMO DATA NOTICE — SYNTHETIC DATA:** Generated on {generated_at}. This report contains no live blockchain queries, verified project metrics, or investment advice.
 
 ## Research question
 {topic}
