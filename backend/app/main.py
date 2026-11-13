@@ -125,7 +125,18 @@ async def process_order(db: Session, request: OrderCreate, force_demo: bool = Fa
     try:
         title, markdown, data_mode, research_meta = await generate_report(request.topic, rules)
     except ResearchSourceError as exc:
-        db.rollback()
+        order.status = "research_failed"
+        order.data_mode = "research_failed"
+        add_event(
+            db,
+            order_id,
+            "research_failed",
+            {
+                "mode": (rules.get("research") or {}).get("mode", "demo"),
+                "reason": str(exc),
+            },
+        )
+        db.commit()
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     order.data_mode = data_mode
