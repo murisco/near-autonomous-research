@@ -32,10 +32,10 @@ class EmailCodeRequest(BaseModel):
         import re
 
         value = value.strip().lower()
-        if not re.fullmatch(r"[^@\\s]+@[^@\\s]+\\.[^@\\s]+", value):
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
             raise ValueError("Enter a valid email address.")
         return value
 
 
 class VerifyEmailCodeRequest(EmailCodeRequest):
-    code: str = Field(min_length=6, max_length=6, pattern=r"^\\d{6}$")
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
