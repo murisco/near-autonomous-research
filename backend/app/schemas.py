@@ -21,3 +21,21 @@ class DemoRunRequest(BaseModel):
         min_length=8,
         max_length=500,
     )
+
+
+class EmailCodeRequest(BaseModel):
+    email: str = Field(min_length=6, max_length=320)
+
+    @field_validator("email")
+    @classmethod
+    def clean_email(cls, value: str) -> str:
+        import re
+
+        value = value.strip().lower()
+        if not re.fullmatch(r"[^@\\s]+@[^@\\s]+\\.[^@\\s]+", value):
+            raise ValueError("Enter a valid email address.")
+        return value
+
+
+class VerifyEmailCodeRequest(EmailCodeRequest):
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\\d{6}$")
