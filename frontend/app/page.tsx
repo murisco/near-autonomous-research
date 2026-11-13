@@ -18,7 +18,8 @@ type DashboardData = {
   near_ai_cloud_configured: boolean;
 };
 
-type AuthUser = { email: string; role: "admin" | "customer" };
+type AuthUser = { account_id: string; role: "admin" | "customer" };
+type NearLoginChallenge = { challenge_id: string; nonce: string; message: string; recipient: string };
 
 type Order = {
   id: string;
@@ -124,9 +125,6 @@ export default function Home() {
   const [paymentQuote, setPaymentQuote] = useState<PaymentQuote | null>(null);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [authEmail, setAuthEmail] = useState("");
-  const [authCode, setAuthCode] = useState("");
-  const [authStep, setAuthStep] = useState<"email" | "code">("email");
   const [authBusy, setAuthBusy] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
 
@@ -213,39 +211,60 @@ export default function Home() {
     }
   }
 
-  async function requestLoginCode(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function signInWithNear() {
     setAuthBusy(true);
     setError("");
-    setAuthMessage("");
+    setAuthMessage("Preparing a one-time NEAR sign-in request...");
     try {
-      const result = await api<{ message: string }>("auth/request-code", {
+      const challenge = await api<NearLoginChallenge>("auth/nonce", {
         method: "POST",
-        body: JSON.stringify({ email: authEmail }),
+        body: JSON.stringify({}),
       });
-      setAuthStep("code");
-      setAuthMessage(result.message || "Check your inbox for the six-digit sign-in code.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not send the sign-in code.");
-    } finally {
-      setAuthBusy(false);
-    }
-  }
-
-  async function verifyLoginCode(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setAuthBusy(true);
-    setError("");
-    setAuthMessage("");
-    try {
-      await api<AuthUser>("auth/verify-code", {
+      const { NearConnector } = await import("@hot-labs/near-connect");
+      const connector = new NearConnector({ features: { signMessage: true } });
+      let finishTimer: ReturnType<typeof setTimeout> | undefined;
+      const signedEventPromise = new Promise<any>((resolve, reject) => {
+        connector.on("wallet:signInAndSignMessage", (event: any) => resolve(event));
+        finishTimer = setTimeout(() => reject(new Error("Wallet sign-in timed out. Please try again.")), 120000);
+      });
+      setAuthMessage("Choose your NEAR wallet and review the identity-only message.");
+      await connector.connect({
+        signMessageParams: {
+          message: challenge.message,
+          recipient: challenge.recipient,
+          nonce: Uint8Array.from(atob(challenge.nonce), (character) => character.charCodeAt(0)),
+        },
+      });
+      const signInEvent = await signedEventPromise;
+      if (finishTimer) clearTimeout(finishTimer);
+      const selectedAccount = signInEvent?.accounts?.[0];
+      const signedMessage = selectedAccount?.signedMessage ?? signInEvent?.signedMessage;
+      const accountId = selectedAccount?.accountId ?? signedMessage?.accountId;
+      const rawPublicKey = signedMessage?.publicKey;
+      const rawSignature = signedMessage?.signature;
+      const publicKey = typeof rawPublicKey === "string" ? rawPublicKey : rawPublicKey?.toString?.();
+      const signature = typeof rawSignature === "string"
+        ? rawSignature
+        : rawSignature instanceof Uint8Array
+          ? btoa(Array.from(rawSignature, (byte) => String.fromCharCode(byte)).join(""))
+          : "";
+      if (!accountId || !publicKey || !signature) {
+        throw new Error("Your wallet did not return a complete NEP-413 signature. Try another NEAR wallet.");
+      }
+      await api<AuthUser>("auth/verify", {
         method: "POST",
-        body: JSON.stringify({ email: authEmail, code: authCode }),
+        body: JSON.stringify({
+          challenge_id: challenge.challenge_id,
+          account_id: accountId,
+          public_key: publicKey,
+          signature,
+        }),
       });
-      setAuthCode("");
+      setAuthMessage("");
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "That code could not be verified.");
+      setError(err instanceof Error ? err.message : "NEAR wallet sign-in failed. Please try again.");
+      setAuthMessage("");
     } finally {
       setAuthBusy(false);
     }
@@ -261,8 +280,6 @@ export default function Home() {
       setEvents([]);
       setSelectedReport(null);
       setPaymentQuote(null);
-      setAuthStep("email");
-      setAuthCode("");
       setAuthMessage("");
       setError("");
     }
@@ -289,26 +306,17 @@ export default function Home() {
       <main className="auth-screen">
         <section className="auth-card">
           <div className="auth-brand"><div className="brand-mark">M</div><div><div className="brand-name">MERIDIAN</div><div className="brand-caption">PRIVATE RESEARCH WORKSPACE</div></div></div>
-          <div className="eyebrow">WELCOME BACK</div>
-          <h1>{authStep === "email" ? "Sign in to MERIDIAN" : "Check your email"}</h1>
-          <p className="auth-description">{authStep === "email" ? "Enter your email and we’ll send you a one-time sign-in code." : "Enter the six-digit code we sent to " + authEmail + "."}</p>
-          {authStep === "email" ? (
-            <form className="auth-form" onSubmit={requestLoginCode}>
-              <label htmlFor="login-email">Email address</label>
-              <input id="login-email" type="email" autoComplete="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="you@example.com" maxLength={320} required />
-              <button className="primary-button" type="submit" disabled={authBusy}>{authBusy ? "Sending code..." : "Continue with email"}</button>
-            </form>
-          ) : (
-            <form className="auth-form" onSubmit={verifyLoginCode}>
-              <label htmlFor="login-code">Six-digit code</label>
-              <input id="login-code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={authCode} onChange={(event) => setAuthCode(event.target.value.replace(/[^0-9]/g, "").slice(0, 6))} placeholder="000000" required />
-              <button className="primary-button" type="submit" disabled={authBusy || authCode.length !== 6}>{authBusy ? "Verifying..." : "Verify and sign in"}</button>
-              <button className="text-button" type="button" onClick={() => { setAuthStep("email"); setAuthCode(""); setError(""); }}>Use a different email</button>
-            </form>
-          )}
+          <div className="eyebrow">NEAR IDENTITY</div>
+          <h1>Sign in with NEAR</h1>
+          <p className="auth-description">Connect your NEAR wallet and sign one short message to prove account ownership. Your wallet keeps your keys.</p>
+          <div className="auth-form">
+            <button className="primary-button" type="button" onClick={() => void signInWithNear()} disabled={authBusy}>
+              {authBusy ? "Waiting for wallet..." : "Connect NEAR wallet"}
+            </button>
+          </div>
           {authMessage && <div className="auth-message">{authMessage}</div>}
           {error && <div className="alert error-alert">{error}</div>}
-          <p className="auth-footnote">Email verification only. No wallet connection, transaction signature or payment is required to sign in.</p>
+          <div className="auth-footnote">Identity verification only. No transaction, transfer, token approval, access-key addition or payment is requested. Never share your seed phrase or private key.</div>
         </section>
       </main>
     );
@@ -319,7 +327,7 @@ export default function Home() {
       <main className="customer-shell">
         <header className="customer-topbar">
           <div className="auth-brand"><div className="brand-mark">M</div><div><div className="brand-name">MERIDIAN</div><div className="brand-caption">PRIVATE RESEARCH WORKSPACE</div></div></div>
-          <div className="customer-account"><span>{authUser.email}</span><button className="signout-button" onClick={() => void signOut()}>Sign out</button></div>
+          <div className="customer-account"><span>{authUser.account_id}</span><button className="signout-button" onClick={() => void signOut()}>Sign out</button></div>
         </header>
         {error && <div className="alert error-alert">{error}</div>}
         {notice && <div className="alert notice-alert">{notice}</div>}
