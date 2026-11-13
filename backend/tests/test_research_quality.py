@@ -1,4 +1,7 @@
+import asyncio
 from datetime import datetime, timezone, timedelta
+
+from backend.app import research_sources as sources
 
 from backend.app.research_sources import (
     analyse_tvl_history,
@@ -192,6 +195,67 @@ def test_stablecoin_parser_reads_chain_circulating_and_historical_comparisons():
     assert rows[0]["change_30d_percent"] == 100.0
 
 
+
+
+def test_stablecoin_collector_falls_back_and_rejects_empty_primary_responses(monkeypatch):
+    class FakeResponse:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.requests = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def get(self, url):
+            self.requests.append(url)
+            if url.startswith("https://api.llama.fi/"):
+                return FakeResponse(404, {"error": "not found"})
+            if "/stablecoincharts/" in url:
+                return FakeResponse(200, [{
+                    "date": int(datetime.now(timezone.utc).timestamp()),
+                    "totalCirculating": 123_456_789,
+                }])
+            if "/stablecoins?" in url:
+                return FakeResponse(200, {
+                    "peggedAssets": [{
+                        "name": "USD Coin",
+                        "symbol": "USDC",
+                        "chainCirculating": {
+                            "Near": {"circulating": {"peggedUSD": 123_456_789}}
+                        },
+                    }]
+                })
+            if url.endswith("/stablecoinchains"):
+                return FakeResponse(200, [
+                    {"name": "Near", "totalCirculating": 123_456_789}
+                ])
+            raise AssertionError("Unexpected URL: " + url)
+
+    monkeypatch.setattr(sources.httpx, "AsyncClient", FakeClient)
+    result = asyncio.run(sources.collect_stablecoin_context("Near"))
+
+    assert result["status"] == "available"
+    assert result["total_supply_usd"] == 123_456_789
+    assert result["asset_count"] == 1
+    assert all(check["status"] == "available" for check in result["endpoint_checks"].values())
+    assert all(check["url"].startswith("https://stablecoins.llama.fi/") for check in result["endpoint_checks"].values())
+    assert all(check["attempts"][0]["http_status"] == 404 for check in result["endpoint_checks"].values())
+
+
+def test_stablecoin_payload_validation_rejects_wrong_chain_and_empty_shapes():
+    assert not sources._stablecoin_payload_has_chain_data("chain_history", [], "Near")
+    assert not sources._stablecoin_payload_has_chain_data("chain_aggregate", [{"name": "Ethereum", "totalCirculating": 1}], "Near")
+    assert not sources._stablecoin_payload_has_chain_data("stablecoin_catalogue", {"peggedAssets": []}, "Near")
 
 def test_chain_selector_ignores_negated_chain_and_prefers_positive_chain():
     names = ["Stable", "Near", "Ethereum"]
