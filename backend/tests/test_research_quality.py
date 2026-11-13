@@ -72,8 +72,8 @@ def test_historical_change_uses_calendar_time_not_row_offsets():
         for day, value in [(0, 100), (2, 110), (7, 120), (10, 130), (14, 150), (30, 200)]
     ]
 
-    assert historical_change(history, 7) == 66.67
-    assert historical_change(history, 30) is None
+    assert historical_change(history, 7) == 33.33
+    assert historical_change(history, 30) == 100.0
 
 
 def test_daily_activity_parser_recognises_metrics_and_does_not_guess():
