@@ -1,5 +1,5 @@
 # Human-editable business policy.
-# Example values for hackathon demo use only; review before any live operation.
+# Initial human-defined operating limits for the hackathon deployment.
 currency: USD
 
 limits:
@@ -12,12 +12,12 @@ revenue_split:
 
 research:
   # Live mode uses source-backed public chain data.
-  # Set to "live" to query DefiLlama and optionally use NEAR AI Cloud.
+  # Live mode queries DefiLlama and optionally uses NEAR AI Cloud.
   mode: live
   default_chain: Near
 
 safety:
-  # Allows the local simulated research workflow. Does not authorize payments.
+  # Stops new orders when true. This switch does not enable payment collection.
   kill_switch: false
   payments_enabled: false
   mainnet_execution_enabled: false
