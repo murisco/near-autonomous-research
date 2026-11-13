@@ -13,7 +13,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const params = await context.params;
   const target =
     BACKEND_URL.replace(/\/$/, "") +
-    "/" +
+    "/api/" +
     params.path.map((part) => encodeURIComponent(part)).join("/") +
     request.nextUrl.search;
 
