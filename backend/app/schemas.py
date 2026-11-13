@@ -39,3 +39,20 @@ class EmailCodeRequest(BaseModel):
 
 class VerifyEmailCodeRequest(EmailCodeRequest):
     code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class NearAuthVerifyRequest(BaseModel):
+    challenge_id: str = Field(min_length=36, max_length=36)
+    account_id: str = Field(min_length=2, max_length=64)
+    public_key: str = Field(min_length=40, max_length=100)
+    signature: str = Field(min_length=80, max_length=100)
+
+    @field_validator("account_id")
+    @classmethod
+    def clean_account_id(cls, value: str) -> str:
+        import re
+
+        value = value.strip().lower()
+        if not re.fullmatch(r"[a-z0-9._-]{2,64}", value):
+            raise ValueError("Enter a valid NEAR account ID.")
+        return value
