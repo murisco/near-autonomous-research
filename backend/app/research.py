@@ -517,7 +517,7 @@ def _customer_summary(
 async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | None, dict]:
     """Use Gemini only; never silently route research through NEAR AI Cloud."""
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-    model = os.getenv("GEMINI_MODEL", GEMINI_DEFAULT_MODEL)
+    model = (os.getenv("GEMINI_MODEL") or GEMINI_DEFAULT_MODEL).strip()
 
     if not gemini_key:
         return None, {
@@ -533,10 +533,10 @@ async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | No
             "NEAR Protocol means the NEAR blockchain, not DeFi protocols. State clearly when evidence is missing."
         }]},
         "contents": [{"role": "user", "parts": [{"text":
-            "Customer's exact research question: " + topic + "\\n\\n"
-            "Verified and publisher-reported source context (JSON):\\n"
+            "Customer's exact research question: " + topic + "\n\n"
+            "Verified and publisher-reported source context (JSON):\n"
             + json.dumps(context, sort_keys=True, ensure_ascii=False)
-            + "\\n\\nAnswer the exact question. Cover every requested dimension. Do not replace missing "
+            + "\n\nAnswer the exact question. Cover every requested dimension. Do not replace missing "
             "evidence with unrelated metrics. Distinguish observed data, publisher-reported claims and "
             "analytical judgement. Cite supplied source names inline."
         }]}],
@@ -554,7 +554,7 @@ async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | No
             response.raise_for_status()
             result = response.json()
         parts = result["candidates"][0]["content"]["parts"]
-        content = "\\n".join(
+        content = "\n".join(
             part["text"] for part in parts
             if isinstance(part, dict) and isinstance(part.get("text"), str)
         ).strip()
@@ -571,7 +571,7 @@ async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | No
             message = ((error_payload.get("error") or {}).get("message") or "").strip()
         except (ValueError, TypeError, AttributeError):
             message = ""
-        safe_message = message[:180] if message else "Google rejected the Gemini request."
+        safe_message = message.replace(gemini_key, "[redacted]")[:180] if message else "Google rejected the Gemini request."
         return None, {
             "status": "unavailable_fallback_used", "provider": "google_gemini",
             "model": model, "error": f"Gemini API returned HTTP {status_code}: {safe_message}",
