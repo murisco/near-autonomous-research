@@ -32,17 +32,20 @@ A customer submits a blockchain research question. MERIDIAN gathers public data,
 - Missing or unrecognised metrics are labelled unavailable; the app does not fill gaps with invented data.
 - Stablecoin source checks validate response shape and exact chain coverage. CI also runs a live smoke check against the primary and compatibility hosts, so an HTTP 200 with empty or wrong-chain data cannot silently pass.
 
-## Customer privacy and access
+## Identity and account access
 
-- Visitors must verify an email address with a one-time code before creating or viewing research orders.
-- One-time codes expire after 10 minutes, are stored only as keyed hashes, and have a five-attempt limit. Requests are rate-limited per email.
+- Visitors connect a NEAR wallet and sign a one-time NEP-413 message to prove control of their account.
+- The message is bound to the MERIDIAN dashboard recipient and a random 32-byte nonce that expires after five minutes and can be used once.
+- The backend verifies the NEP-413 signature and checks NEAR RPC to confirm the signing public key is currently a full-access key on the claimed account.
+- Login never calls `signAndSendTransaction`, never adds an access key, and never asks for a seed phrase or private key.
+- Login signatures cannot transfer funds, approve tokens, grant allowances, or authorize payments. Payment and mainnet execution remain disabled.
 - Sessions use random opaque tokens stored as hashes and delivered in HTTP-only, same-site cookies.
-- Customer API responses are filtered by the verified email on the server. Supplying another customer's order ID returns not found.
+- Customer API responses are filtered by their verified NEAR account ID. Supplying another customer's order ID returns not found.
 - Business totals, projected margins, customer-wide order search, and the complete audit ledger are admin-only.
-- Admin access is granted only to addresses listed in `MERIDIAN_ADMIN_EMAILS`; it is never selected by the browser.
-- Email login does not connect a wallet, request transaction signatures, or move funds.
+- Admin access is granted only to account IDs listed in `MERIDIAN_ADMIN_ACCOUNT_IDS`; it is never selected by the browser.
+- Only NEP-413 Ed25519 signatures from current full-access keys are accepted. Limited-access keys are rejected.
 
-For production email delivery, configure `RESEND_API_KEY`, `MERIDIAN_FROM_EMAIL` (a verified sender), `MERIDIAN_AUTH_SECRET` (at least 32 random characters), and `MERIDIAN_ADMIN_EMAILS` on the **API service** in Railway. Generate a secret with `openssl rand -hex 32`. Never commit these values. Sign-in fails closed until the required settings are present.
+Set `MERIDIAN_ADMIN_ACCOUNT_IDS` to a comma-separated list of owner NEAR account IDs on the API service in Railway. The default signing recipient is `meridian-dashboard.up.railway.app`; set `MERIDIAN_NEAR_AUTH_RECIPIENT` if the public dashboard hostname changes. Optional RPC overrides are `NEAR_MAINNET_RPC_URL` and `NEAR_TESTNET_RPC_URL`.
 
 ## What is not live
 
