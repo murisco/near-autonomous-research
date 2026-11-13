@@ -15,6 +15,7 @@ type DashboardData = {
   mainnet_execution_enabled: boolean;
   data_mode: string;
   research_mode: string;
+  near_ai_cloud_configured: boolean;
 };
 
 type Order = {
@@ -181,6 +182,7 @@ export default function Home() {
         <div className="status-strip">
           <div className="status-title"><span className="status-dot" /> SYSTEM STATUS</div>
           <div className="status-item">Research engine <strong>{dashboard?.research_mode === "live" ? "Live data" : "Synthetic demo"}</strong></div>
+          <div className="status-item">NEAR AI Cloud <strong className={dashboard?.near_ai_cloud_configured ? "on" : "off"}>{dashboard?.near_ai_cloud_configured ? "Configured" : "API key needed"}</strong></div>
           <div className="status-item">Payments <strong className="off">Disabled</strong></div>
           <div className="status-item">Mainnet execution <strong className="off">Disabled</strong></div>
           <div className="status-item">Safety gate <strong className="on">Active</strong></div>
@@ -188,7 +190,7 @@ export default function Home() {
 
         <section className="metrics-grid">
           <Metric label="Research orders" value={dashboard ? String(dashboard.orders) : "—"} helper="All time" icon="▤" />
-          <Metric label="Reports generated" value={dashboard ? String(dashboard.reports_generated) : "—"} helper="Demo reports" icon="▧" />
+          <Metric label="Reports generated" value={dashboard ? String(dashboard.reports_generated) : "—"} helper="Generated reports" icon="▧" />
           <Metric label="Quoted sales" value={dashboard ? money(dashboard.quoted_sales_usd) : "—"} helper="Not collected revenue" icon="$" />
           <Metric label="Revenue received" value={dashboard ? money(dashboard.revenue_received_usd) : "—"} helper="No real payments" icon="↗" />
         </section>
@@ -229,7 +231,7 @@ export default function Home() {
               <span className="chart-icon">⌁</span>
             </div>
             <div className="economics-list">
-              <Economics label="Simulated inference spend" value={dashboard ? money(dashboard.simulated_inference_spend_usd) : "—"} />
+              <Economics label="Estimated inference spend" value={dashboard ? money(dashboard.simulated_inference_spend_usd) : "—"} />
               <Economics label="Projected profit" value={dashboard ? money(dashboard.projected_profit_usd) : "—"} />
               <Economics label="Operator share" value={rules ? rules.revenue_split.operator_percent + "%" : "—"} />
               <Economics label="Contributor share" value={rules ? rules.revenue_split.contributors_percent + "%" : "—"} />
@@ -237,7 +239,7 @@ export default function Home() {
             <div className="budget-block">
               <div className="budget-head"><span>Daily inference budget</span><strong>{dashboard ? money(dashboard.today_inference_spend_usd) + " / " + money(dashboard.today_inference_budget_usd) : "—"}</strong></div>
               <div className="budget-track"><div className="budget-fill" style={{ width: budgetUsed + "%" }} /></div>
-              <div className="budget-caption">Spend is estimated for demo runs and blocked at the configured daily limit.</div>
+              <div className="budget-caption">Inference costs are estimates and new orders are blocked at the configured daily limit.</div>
             </div>
           </section>
         </div>
@@ -272,7 +274,7 @@ export default function Home() {
               <table>
                 <thead><tr><th>RESEARCH TOPIC</th><th>QUOTE</th><th>STATUS</th><th>CREATED</th><th /></tr></thead>
                 <tbody>
-                  {orders.length === 0 ? <tr><td colSpan={5} className="empty-cell">{loading ? "Loading orders..." : "No research orders yet. Create your first demo report above."}</td></tr> :
+                  {orders.length === 0 ? <tr><td colSpan={5} className="empty-cell">{loading ? "Loading orders..." : "No research orders yet. Create your first research report above."}</td></tr> :
                     orders.map((order) => (
                       <tr key={order.id}>
                         <td className="topic-cell">{order.topic}</td>
@@ -301,7 +303,7 @@ export default function Home() {
 
         <footer className="footer">
           <span>MERIDIAN · AUTONOMOUS RESEARCH BUSINESS</span>
-          <span>DEMO MODE ONLY · NOT CONNECTED TO LIVE FUNDS</span>
+          <span>PAYMENTS DISABLED · MAINNET EXECUTION DISABLED</span>
         </footer>
       </section>
     </main>
