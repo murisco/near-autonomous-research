@@ -18,6 +18,8 @@ A customer submits a blockchain research question. MERIDIAN gathers public data,
 - Tracks estimated inference costs, quoted sales, projected profit and operator/contributor shares.
 - Records research source metadata, exclusions, payment previews and accounting decisions in an off-chain audit ledger.
 - Persists records in Railway PostgreSQL; SQLite is available for local development.
+- Uses passwordless email sign-in with short-lived one-time codes and HTTP-only sessions.
+- Restricts each customer to their own research orders and reports; only allowlisted admin emails can access business metrics and the full audit ledger.
 
 ## Data-quality rules
 
@@ -30,6 +32,18 @@ A customer submits a blockchain research question. MERIDIAN gathers public data,
 - Missing or unrecognised metrics are labelled unavailable; the app does not fill gaps with invented data.
 - Stablecoin source checks validate response shape and exact chain coverage. CI also runs a live smoke check against the primary and compatibility hosts, so an HTTP 200 with empty or wrong-chain data cannot silently pass.
 
+## Customer privacy and access
+
+- Visitors must verify an email address with a one-time code before creating or viewing research orders.
+- One-time codes expire after 10 minutes, are stored only as keyed hashes, and have a five-attempt limit. Requests are rate-limited per email.
+- Sessions use random opaque tokens stored as hashes and delivered in HTTP-only, same-site cookies.
+- Customer API responses are filtered by the verified email on the server. Supplying another customer's order ID returns not found.
+- Business totals, projected margins, customer-wide order search, and the complete audit ledger are admin-only.
+- Admin access is granted only to addresses listed in `MERIDIAN_ADMIN_EMAILS`; it is never selected by the browser.
+- Email login does not connect a wallet, request transaction signatures, or move funds.
+
+For production email delivery, configure `RESEND_API_KEY`, `MERIDIAN_FROM_EMAIL` (a verified sender), `MERIDIAN_AUTH_SECRET` (at least 32 random characters), and `MERIDIAN_ADMIN_EMAILS` on the **API service** in Railway. Generate a secret with `openssl rand -hex 32`. Never commit these values. Sign-in fails closed until the required settings are present.
+
 ## What is not live
 
 - Customer payment collection or settlement through NEAR Intents.
@@ -41,7 +55,7 @@ The payment preview is a **Tidepool community-sandbox dry quote** only. It is no
 
 Revenue received stays at zero until a verified payment status is connected. Payout shares are projections, not transfers.
 
-## Optional environment variables
+## Environment variables
 
 Set these only in Railway's service variables or a local untracked `.env` file. Never commit secrets.
 
