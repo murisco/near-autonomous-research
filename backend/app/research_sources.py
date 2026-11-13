@@ -162,21 +162,11 @@ async def collect_defillama_context(topic: str, default_chain: str = "Near") -> 
             chain_response = await client.get(DEFILLAMA_BASE + "/v2/chains")
             chain_response.raise_for_status()
             chains = chain_response.json()
-            history_url = DEFILLAMA_BASE + "/v2/historicalChainTvl/" + quote(default_chain, safe="")
-            history_response, protocols_response = await asyncio.gather(
-                client.get(history_url),
-                client.get(DEFILLAMA_BASE + "/protocols"),
-            )
-            history_response.raise_for_status()
-            protocols_response.raise_for_status()
-            history = history_response.json()
-            protocols = protocols_response.json()
         except (httpx.HTTPError, ValueError, TypeError) as exc:
-            raise ResearchSourceError("DefiLlama could not provide a valid chain TVL snapshot.") from exc
+            raise ResearchSourceError("DefiLlama could not provide a valid chain catalogue.") from exc
 
-    if not isinstance(chains, list) or not isinstance(history, list) or not isinstance(protocols, list):
-        raise ResearchSourceError("DefiLlama returned an unexpected response format.")
-
+    if not isinstance(chains, list):
+        raise ResearchSourceError("DefiLlama returned an unexpected chain catalogue format.")
     names = [
         str(item.get("name", "")) for item in chains
         if isinstance(item, dict) and item.get("name")
@@ -195,6 +185,22 @@ async def collect_defillama_context(topic: str, default_chain: str = "Near") -> 
     current_tvl = as_float(chain_row.get("tvl"))
     if current_tvl is None:
         raise ResearchSourceError("DefiLlama did not return a valid chain TVL value.")
+
+    history_url = DEFILLAMA_BASE + "/v2/historicalChainTvl/" + quote(selected, safe="")
+    async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
+        try:
+            history_response, protocols_response = await asyncio.gather(
+                client.get(history_url),
+                client.get(DEFILLAMA_BASE + "/protocols"),
+            )
+            history_response.raise_for_status()
+            protocols_response.raise_for_status()
+            history = history_response.json()
+            protocols = protocols_response.json()
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
+            raise ResearchSourceError("DefiLlama could not provide matching chain history and protocol rows.") from exc
+    if not isinstance(history, list) or not isinstance(protocols, list):
+        raise ResearchSourceError("DefiLlama returned an unexpected history or protocol response format.")
 
     clean_history = [
         row for row in history
