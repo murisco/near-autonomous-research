@@ -101,12 +101,12 @@ def create_near_login_nonce(db: Session = Depends(get_db)) -> dict:
     issued = now.replace(microsecond=0).isoformat() + "Z"
     expires = expires_at.replace(microsecond=0).isoformat() + "Z"
     message = (
-        "Sign in to MERIDIAN (identity only).\\n"
-        f"Website: https://{recipient}\\n"
-        "Purpose: Prove control of the NEAR account selected in your wallet.\\n"
-        f"Challenge: {challenge_id}\\n"
-        f"Issued: {issued}\\n"
-        f"Expires: {expires}\\n\\n"
+        "Sign in to MERIDIAN (identity only).\n"
+        f"Website: https://{recipient}\n"
+        "Purpose: Prove control of the NEAR account selected in your wallet.\n"
+        f"Challenge: {challenge_id}\n"
+        f"Issued: {issued}\n"
+        f"Expires: {expires}\n\n"
         "This is an off-chain message signature only. It does not approve a transaction, "
         "transfer tokens, grant an allowance, or authorize a payment."
     )
