@@ -11,6 +11,7 @@ from .research_sources import (
     ResearchSourceError,
     collect_defillama_context,
     collect_nearblocks_activity,
+    collect_stablecoin_context,
     collect_official_near_context,
     collect_near_agent_projects,
 )
@@ -97,17 +98,17 @@ def _activity_summary(activity: dict) -> str:
     ):
         metric = activity.get(key) or {"status": "unavailable"}
         if metric.get("status") != "available":
-            lines.append(f"- **{title}:** unavailable ({metric.get('reason', 'source did not return a recognised daily metric')})")
+            lines.append(f"- **{title}:** unavailable ({metric.get('reason', 'source did not return a recognised completed daily metric')})")
             continue
         change = metric.get("last_7d_vs_previous_7d_percent")
-        change_text = "not available" if change is None else format(change, "+.2f") + "%"
+        change_text = "not available (insufficient completed-day coverage)" if change is None else format(change, "+.2f") + "%"
         lines.append(
-            f"- **{title}:** {metric.get('latest_day_value'):,.0f} on {metric.get('latest_day')}; "
-            f"{metric.get('last_7d_total'):,.0f} summed daily counts across {metric.get('last_7d_days')} reported days (not deduplicated across days); "
-            f"7-day change vs previous 7 days: {change_text}."
+            f"- **{title}:** {metric.get('latest_day_value'):,.0f} on {metric.get('latest_day')} (latest completed UTC day); "
+            f"{metric.get('last_7d_total'):,.0f} summed daily counts across {metric.get('last_7d_days')} of 7 days; "
+            f"comparison with previous 7-day window: {change_text}."
         )
+    lines.append("- Current UTC day is excluded from daily comparisons because it may be incomplete. Seven-day sums are daily counts, not unique entities across the full period.")
     return "\n".join(lines)
-
 
 def _official_metrics_lines(official: dict) -> str:
     metrics = official.get("official_hub_metrics") or []
@@ -156,6 +157,133 @@ def _intents_summary(official: dict) -> str:
             "- A partner JWT is present, but the Explorer API has not yet been queried by this report version."
         )
     return headline + "\n" + detail
+
+
+def _tvl_anomaly_summary(context: dict) -> str:
+    checks = context.get("tvl_anomaly_checks") or {}
+    if checks.get("status") != "available":
+        return "- TVL anomaly checks unavailable."
+    lines = [
+        f"- Latest history observation: {_usd(checks.get('latest_history_tvl_usd'))} at {checks.get('latest_history_at', 'not available')}.",
+        f"- Current endpoint versus latest history: {_metric_change(checks.get('current_vs_latest_history_percent'))}.",
+        f"- Largest approximately daily move: {checks.get('largest_daily_move') or 'not available'}.",
+        f"- Daily observations checked: {checks.get('daily_observations_checked', 0)}.",
+    ]
+    for warning in checks.get("warnings") or []:
+        lines.append("- **Warning:** " + warning)
+    if not checks.get("warnings"):
+        lines.append("- No configured TVL anomaly threshold was triggered; this is not proof that the trend is organic.")
+    return "\n".join(lines)
+
+
+def _stablecoin_summary(stablecoins: dict) -> str:
+    if stablecoins.get("status") != "available":
+        return "- Stablecoin supply by chain: **unavailable**. " + str(stablecoins.get("reason") or "The source did not return a usable chain aggregate or token breakdown.")
+    lines = [
+        f"- **Total stablecoin supply:** {_usd(stablecoins.get('total_supply_usd'))}.",
+        f"- **Measurement method:** {stablecoins.get('total_method', 'not available')}.",
+        f"- **As of:** {stablecoins.get('as_of') or 'not available'}.",
+        f"- **7-day change:** {_metric_change(stablecoins.get('change_7d_percent'))}.",
+        f"- **30-day change:** {_metric_change(stablecoins.get('change_30d_percent'))}.",
+        f"- **Stablecoins identified:** {stablecoins.get('asset_count', 0)}.",
+    ]
+    assets = stablecoins.get("assets") or []
+    if assets:
+        lines.append("### Token-level supply returned")
+        lines.extend(
+            "- **{name} ({symbol})**: {supply}; 7-day change {change}.".format(
+                name=item.get("name") or "Unknown",
+                symbol=item.get("symbol") or "symbol unavailable",
+                supply=_usd(item.get("current_supply_usd")),
+                change=_metric_change(item.get("change_7d_percent")),
+            )
+            for item in assets[:10]
+        )
+    for warning in stablecoins.get("quality_warnings") or []:
+        lines.append("- **Data-quality note:** " + warning)
+    lines.append("- Stablecoin supply is not the same as immediately available DEX liquidity, transaction volume, or active users.")
+    return "\n".join(lines)
+
+
+def _project_groups(projects: dict) -> tuple[str, dict]:
+    groups = [
+        ("autonomous_ai_agent_candidates", "README-screened autonomous AI-agent candidates"),
+        ("agent_infrastructure", "Agent infrastructure and frameworks"),
+        ("related_ecosystem_projects", "Related NEAR projects not verified as agents"),
+        ("unverified_candidates", "Unverified candidates (README unavailable or NEAR connection unclear)"),
+    ]
+    chunks = []
+    counts = {}
+    for key, label in groups:
+        rows = projects.get(key) or []
+        counts[key] = len(rows)
+        if not rows:
+            continue
+        chunks.append("### " + label)
+        for item in rows:
+            recent = item.get("recent_commits") or []
+            recent_text = "; ".join(
+                f"{commit.get('date') or 'date unavailable'}: {commit.get('message') or 'commit message unavailable'}"
+                for commit in recent[:2]
+            ) or "recent commit details unavailable"
+            chunks.append(
+                "- **{name}** — {description}. Classification: {classification}. "
+                "GitHub: {stars} stars, {forks} forks, {language}; latest push {pushed}. "
+                "README: {readme_status}. Recent commits: {recent}. [Repository]({url})".format(
+                    name=item.get("name") or "Unnamed repository",
+                    description=item.get("description") or "No repository description supplied",
+                    classification=item.get("classification") or "unclassified",
+                    stars=item.get("stars") if item.get("stars") is not None else "n/a",
+                    forks=item.get("forks") if item.get("forks") is not None else "n/a",
+                    language=item.get("language") or "not specified",
+                    pushed=item.get("last_pushed_at") or "not available",
+                    readme_status=item.get("readme_status") or "not checked",
+                    recent=recent_text,
+                    url=item.get("url") or "https://github.com",
+                )
+            )
+    return ("\n".join(chunks) if chunks else "- No candidate repositories passed the current discovery and inspection steps."), counts
+
+
+def _adoption_verdict(chain_context: dict, activity: dict, stablecoins: dict, projects: dict) -> str:
+    evidence = []
+    transaction = activity.get("transaction_stats") or {}
+    addresses = activity.get("address_stats") or {}
+    if transaction.get("status") == "available":
+        evidence.append(
+            "Completed-day transaction observations are available; 7-day comparison "
+            + (_metric_change(transaction.get("last_7d_vs_previous_7d_percent")) if transaction.get("last_7d_vs_previous_7d_percent") is not None else "is not robust enough to calculate")
+            + "."
+        )
+    else:
+        evidence.append("Daily transaction evidence is unavailable or incomplete.")
+    if addresses.get("status") == "available":
+        evidence.append(
+            "Completed-day active/unique-address observations are available; 7-day comparison "
+            + (_metric_change(addresses.get("last_7d_vs_previous_7d_percent")) if addresses.get("last_7d_vs_previous_7d_percent") is not None else "is not robust enough to calculate")
+            + "."
+        )
+    else:
+        evidence.append("Daily active-address evidence is unavailable or incomplete.")
+    if stablecoins.get("status") == "available":
+        evidence.append("Stablecoin supply was independently queried from DefiLlama; supply alone does not establish usable liquidity or payment demand.")
+    else:
+        evidence.append("Independent stablecoin supply evidence was unavailable.")
+    tvl_warnings = (chain_context.get("tvl_anomaly_checks") or {}).get("warnings") or []
+    if tvl_warnings:
+        evidence.append("TVL growth has anomaly warnings and should not be interpreted as organic until constituent-level changes are reconciled.")
+    elif chain_context.get("change_7d_percent") is not None:
+        evidence.append("TVL history is available, but TVL measures deposited capital rather than retained users or economic activity.")
+    agent_count = len(projects.get("autonomous_ai_agent_candidates") or [])
+    infra_count = len(projects.get("agent_infrastructure") or [])
+    evidence.append(f"GitHub inspection found {agent_count} README-screened AI-agent candidates and {infra_count} agent-infrastructure candidates; these are not deployment or usage proofs.")
+    conclusion = (
+        "**Assessment: sustainable adoption is not yet established by the retrieved evidence.** "
+        "The report has signals of network activity and developer work, but it still lacks independently verified retained-user cohorts, "
+        "app-level fees/revenue, stablecoin transfer and DEX-liquidity usage, and production agent execution metrics. "
+        "Treat the ecosystem as active and worth monitoring, not as proven to have sustainable adoption."
+    )
+    return "\n".join(["- " + item for item in evidence] + ["", conclusion])
 
 
 async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | None, dict]:
@@ -232,12 +360,13 @@ async def generate_live_report(
 ) -> tuple[str, str, str, dict]:
     chain_task = collect_defillama_context(topic, default_chain)
     activity_task = collect_nearblocks_activity()
+    stablecoin_task = collect_stablecoin_context(default_chain)
     official_task = collect_official_near_context()
     projects_task = collect_near_agent_projects()
 
     chain_context = await chain_task
-    activity_result, official_result, projects_result = await __import__("asyncio").gather(
-        activity_task, official_task, projects_task, return_exceptions=True
+    activity_result, stablecoin_result, official_result, projects_result = await __import__("asyncio").gather(
+        activity_task, stablecoin_task, official_task, projects_task, return_exceptions=True
     )
     activity = (
         activity_result if isinstance(activity_result, dict)
@@ -265,9 +394,18 @@ async def generate_live_report(
         }
     )
 
-    projects = projects_result if isinstance(projects_result, dict) else {"status": "unavailable", "projects": [], "reason": "GitHub discovery request failed."}
+    stablecoins = stablecoin_result if isinstance(stablecoin_result, dict) else {
+        "status": "unavailable", "chain": default_chain, "assets": [],
+        "reason": "Stablecoin source request failed.", "sources": ["https://stablecoins.llama.fi/"],
+    }
+    projects = projects_result if isinstance(projects_result, dict) else {
+        "status": "unavailable", "projects": [], "autonomous_ai_agent_candidates": [],
+        "agent_infrastructure": [], "related_ecosystem_projects": [], "unverified_candidates": [],
+        "reason": "GitHub discovery request failed."
+    }
     research_context = {
         "defillama": chain_context,
+        "stablecoins": stablecoins,
         "nearblocks": activity,
         "official_near": official,
         "near_agent_projects_github": projects,
@@ -300,6 +438,11 @@ async def generate_live_report(
         quality_warnings.append(
             "NearBlocks daily activity metrics were unavailable or did not match a recognised response field."
         )
+    if stablecoins.get("status") != "available":
+        quality_warnings.append("Independent chain stablecoin supply was unavailable.")
+    quality_warnings.extend(stablecoins.get("quality_warnings") or [])
+    if (chain_context.get("tvl_anomaly_checks") or {}).get("warnings"):
+        quality_warnings.extend(chain_context["tvl_anomaly_checks"]["warnings"])
     if not official.get("near_intents_documented_facts"):
         quality_warnings.append("Official NEAR Intents documentation could not be retrieved during this run.")
     if ai_status != "completed":
@@ -314,6 +457,7 @@ async def generate_live_report(
     sources = list(dict.fromkeys(
         (chain_context.get("sources") or [])
         + (activity.get("sources") or [])
+        + (stablecoins.get("sources") or [])
         + (official.get("sources") or [])
         + ([projects.get("source")] if projects.get("source") else [])
     ))
@@ -330,21 +474,13 @@ async def generate_live_report(
     )
 
     project_rows = projects.get("projects") or []
-    if project_rows:
-        project_markdown = "\n".join(
-            "- **{name}** — {description}. GitHub: {stars} stars, {forks} forks, {language}; last pushed {pushed}. [Repository]({url})".format(
-                name=item.get("name") or "Unnamed repository",
-                description=item.get("description") or "No repository description supplied",
-                stars=item.get("stars") if item.get("stars") is not None else "n/a",
-                forks=item.get("forks") if item.get("forks") is not None else "n/a",
-                language=item.get("language") or "not specified",
-                pushed=item.get("last_pushed_at") or "not available",
-                url=item.get("url") or "https://github.com",
-            ) for item in project_rows
-        )
-    else:
-        project_markdown = "- No project repositories were returned by GitHub search in this run."
-    project_note = "GitHub metadata is a discovery signal only. It does not prove deployment, active agents, production users, paying customers, or revenue. Repository descriptions are owner supplied and require independent verification."
+    project_markdown, project_counts = _project_groups(projects)
+    project_note = (
+        "Classification is based on repository metadata plus README keyword evidence and recent commit messages. "
+        "It is a screening step, not a source-code audit or proof of a deployed product, active users, or revenue. "
+        "Repository descriptions and README claims are owner supplied."
+    )
+    adoption_assessment = _adoption_verdict(chain_context, activity, stablecoins, projects)
 
     title = "MERIDIAN NEAR Ecosystem Intelligence: " + chain + " — " + topic[:55]
     body = f"""# {title}
@@ -374,6 +510,9 @@ async def generate_live_report(
 ### Excluded or inconsistent rows
 {excluded_section}
 
+### TVL anomaly checks
+{_tvl_anomaly_summary(chain_context)}
+
 DefiLlama's chain-TVL methodology excludes bridge TVL and liquid-staking TVL from chain totals by default. CEX assets are not a chain DeFi-TVL contribution. A protocol is also excluded here when its reported chain-specific value exceeds the chain-wide figure by more than 5%, or when DefiLlama flags it as double-counted.
 
 ## 2. Network adoption and usage
@@ -381,35 +520,43 @@ DefiLlama's chain-TVL methodology excludes bridge TVL and liquid-staking TVL fro
 
 NearBlocks data is a third-party indexed source. Its public API documentation identifies daily transaction and address statistics endpoints; MERIDIAN reports only numeric fields it can recognise in the response. NearBlocks attribution: Powered by NearBlocks.io APIs.
 
-## 3. NEAR ecosystem metrics hub
+## 3. Stablecoin liquidity
+{_stablecoin_summary(stablecoins)}
+
+DefiLlama stablecoin supply is a supply measure, not a direct measure of accessible DEX depth, transfers, trading volume, or organic demand. The token-level list depends on the provider's chain mapping and stablecoin catalogue.
+
+## 4. NEAR ecosystem metrics hub
 {_official_metrics_lines(official)}
 
 These are publisher-displayed headline values from NEAR's research and analytics page. The page view retrieved does not provide the underlying query definitions or a data cut-off alongside each headline, so these values are not used as independent proof of active users, transaction growth, or economic value.
 
-## 4. NEAR AI and agent infrastructure
+## 5. NEAR AI and agent infrastructure
 {chr(10).join("- " + item for item in (official.get("near_ai_documented_facts") or ["Official NEAR AI Cloud documentation could not be retrieved in this run."]))}
 
 The current model catalogue distinguishes Confidential TEE, third-party Confidential TEE, and Incognito tiers. A report must not imply that every model gets the same hardware isolation or verification guarantees. NEAR AI Cloud model analysis in this report: **{ai_status_note}**.
 
-## 5. NEAR Intents and autonomous payments
+## 6. NEAR Intents and autonomous payments
 {_intents_summary(official)}
 
 {chr(10).join("- " + item for item in (official.get("near_intents_documented_facts") or ["Official NEAR Intents integration documentation could not be retrieved in this run."]))}
 
 **MERIDIAN integration boundary:** the product has only a community Tidepool dry-quote preview. It has not created a deposit address, accepted customer payment, submitted a transaction, or settled a NEAR Intents swap. The official NEAR Intents 1Click API has no testnet version; never describe Tidepool as an official NEAR testnet.
 
-## 6. NEAR agent project and developer evidence
+## 7. NEAR agent project and developer evidence
 {project_markdown}
 
 {project_note}
 
-## 7. Commercial opportunities
+## Evidence-based adoption verdict
+{adoption_assessment}
+
+## 8. Commercial opportunities
 - **Paid research:** package source-backed chain and ecosystem analysis into reports with clear freshness, evidence, and methodology.
 - **Agent inference:** use NEAR AI Cloud for evidence synthesis where a configured model tier meets the data-handling requirements.
 - **Intent-based settlement:** a future payment adapter can use NEAR Intents for supported cross-chain payments, but only after an owner-approved mainnet flow, quote verification, wallet custody, settlement monitoring, and refund handling are implemented.
 - **Contributor economics:** automate accounting only after payment settlement is proven; until then revenue shares remain projections.
 
-## 8. Risks and open questions
+## 9. Risks and open questions
 - TVL is a capital-deposit measure, not a count of customers, transactions, fees, or protocol revenue.
 - Protocol-level TVL rows can overlap; they must not be summed unless the data provider confirms they are non-overlapping.
 - Official ecosystem headline figures have publisher-defined methodology and a separate data cut-off that must be checked before investment-grade use.
@@ -417,8 +564,13 @@ The current model catalogue distinguishes Confidential TEE, third-party Confiden
 - NEAR AI privacy guarantees depend on the selected model tier.
 - A live source snapshot does not establish repeat customers, revenue, retention, or willingness to pay for MERIDIAN's reports.
 
-## 9. Data quality checks
-- GitHub project discovery: {projects.get('status', 'unavailable')}; {len(project_rows)} repositories returned.
+## 10. Data quality checks
+- GitHub discovery: {projects.get('status', 'unavailable')}; {len(project_rows)} repositories inspected.
+- README-screened AI-agent candidates: {project_counts.get('autonomous_ai_agent_candidates', 0)}.
+- Agent infrastructure candidates: {project_counts.get('agent_infrastructure', 0)}.
+- Related NEAR ecosystem projects not verified as agents: {project_counts.get('related_ecosystem_projects', 0)}.
+- Stablecoin supply status: {stablecoins.get('status', 'unavailable')}; {stablecoins.get('asset_count', 0)} token rows returned.
+- Latest activity dates are complete UTC days only; incomplete current-day rows are excluded.
 {warning_markdown}
 
 ## Sources
@@ -430,7 +582,7 @@ The current model catalogue distinguishes Confidential TEE, third-party Confiden
 - Onchain transaction state: none initiated
 """
     metadata = {
-        "provider": "defillama+nearblocks+near_official_sources",
+        "provider": "defillama+defillama_stablecoins+nearblocks+github_readme_commit_inspection+near_official_sources",
         "chain": chain,
         "source_urls": sources,
         "data_mode": data_mode,
@@ -444,6 +596,10 @@ The current model catalogue distinguishes Confidential TEE, third-party Confiden
         },
         "quality_warning_count": len(quality_warnings),
         "excluded_protocol_count": excluded_count,
+        "stablecoin_status": stablecoins.get("status"),
+        "stablecoin_asset_count": stablecoins.get("asset_count", 0),
+        "agent_project_classification_counts": project_counts,
+        "tvl_anomaly_warning_count": len((chain_context.get("tvl_anomaly_checks") or {}).get("warnings") or []),
     }
     return title, body, data_mode, metadata
 
