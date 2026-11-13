@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, joinedload
 from .config import load_business_rules
 from .database import Base, engine, get_db
 from .models import AuditEvent, Order, Report
+from .payments import create_tidepool_dry_quote
 from .policy import PolicyViolation, enforce_order_policy
 from .research import ResearchSourceError, generate_report
 from .schemas import DemoRunRequest, OrderCreate
@@ -170,15 +171,33 @@ async def process_order(db: Session, request: OrderCreate, force_demo: bool = Fa
         {"report_id": report_id, "data_mode": data_mode},
     )
     add_event(db, order_id, "research_sources_recorded", research_meta)
+    payment_settings = rules.get("payments") or {}
+    if force_demo:
+        payment_quote = {
+            "status": "simulation_only",
+            "provider": "none",
+            "reason": "Deterministic CI/demo path does not make external quote requests.",
+            "no_deposit_address": True,
+            "settlement": False,
+        }
+    else:
+        payment_quote = await create_tidepool_dry_quote(request.price_usd, payment_settings)
+
+    quote_event_type = (
+        "tidepool_sandbox_dry_quote_created"
+        if payment_quote.get("status") == "dry_quote_returned"
+        else "simulated_payment_quote_created"
+    )
     add_event(
         db,
         order_id,
-        "simulated_payment_quote_created",
+        quote_event_type,
         {
-            "amount_usd": round(request.price_usd, 2),
-            "status": "simulation_only",
-            "near_intents_called": False,
-            "reason": "Payment integration is not enabled in this build.",
+            "invoice_quote_usd": round(request.price_usd, 2),
+            "payment_quote": payment_quote,
+            "near_intents_production_called": False,
+            "deposit_address_created": False,
+            "customer_payment_received": False,
         },
     )
     add_event(
@@ -204,7 +223,9 @@ async def process_order(db: Session, request: OrderCreate, force_demo: bool = Fa
     db.refresh(order)
     db.refresh(report)
     order.report = report
-    return serialize_order(order, include_report=True)
+    response_payload = serialize_order(order, include_report=True)
+    response_payload["payment_quote"] = payment_quote
+    return response_payload
 
 
 @app.get("/health")
