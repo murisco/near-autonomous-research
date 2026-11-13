@@ -1,0 +1,17 @@
+# Human-editable business policy.
+# Example values for local demo only; review before any live operation.
+currency: USD
+
+limits:
+  max_inference_spend_per_day: 5.00
+  minimum_report_price: 10.00
+
+revenue_split:
+  operator_percent: 80
+  contributors_percent: 20
+
+safety:
+  kill_switch: true
+  payments_enabled: false
+  mainnet_execution_enabled: false
+  require_human_approval_for_payouts: true
