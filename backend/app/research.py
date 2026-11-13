@@ -397,9 +397,9 @@ async def generate_live_report(
     stablecoins = stablecoin_result if isinstance(stablecoin_result, dict) else {
         "status": "unavailable", "chain": default_chain, "assets": [],
         "reason": "Stablecoin source request failed.", "sources": [
-            "https://api.llama.fi/stablecoins/stablecoincharts/" + default_chain,
-            "https://api.llama.fi/stablecoins/stablecoins?includePrices=true",
-            "https://api.llama.fi/stablecoins/stablecoinchains",
+            "https://api.llama.fi/stablecoincharts/" + default_chain,
+            "https://api.llama.fi/stablecoins?includePrices=true",
+            "https://api.llama.fi/stablecoinchains",
         ],
     }
     projects = projects_result if isinstance(projects_result, dict) else {
