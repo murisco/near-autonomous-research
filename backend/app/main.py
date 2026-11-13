@@ -102,6 +102,7 @@ def process_order(db: Session, request: OrderCreate) -> dict:
         data_mode="synthetic_demo",
     )
     db.add(order)
+    db.flush()  # Ensure the order exists before its audit events are inserted.
     add_event(
         db,
         order_id,
