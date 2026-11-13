@@ -19,7 +19,7 @@ The product is designed around the hackathon's one-agent research-shop brief: se
 
 ## What is not live yet
 
-- Customer payment collection through NEAR Intents.
+- Customer payment collection or settlement through NEAR Intents (only the community Tidepool dry-quote endpoint is called).
 - Automated contributor payouts.
 - OutLayer custody wallet creation and policy configuration.
 - On-chain audit anchoring.
@@ -97,7 +97,7 @@ pytest -q
 2. Submit a specific NEAR ecosystem research question with a quote of at least the configured minimum.
 3. Open the generated report and inspect the live-source label, source links, retrieval time, and methodology notes.
 4. Review the business performance panel for the report quote, estimated compute cost, projected profit, and configured revenue split.
-5. Open the audit ledger and inspect the order, policy, research, source, payment-preview, and accounting events.
+5. Inspect the Tidepool dry quote preview, then open the audit ledger to review the order, policy, research, source, quote and accounting events.
 6. Confirm that revenue received is still zero and that payment collection, payouts, and mainnet execution are not falsely presented as complete.
 
 ## Hackathon submission
