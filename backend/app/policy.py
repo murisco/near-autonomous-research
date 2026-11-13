@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, time
 
 from sqlalchemy import func, select
@@ -29,6 +30,15 @@ def current_rules() -> dict:
     return rules
 
 
+def estimated_inference_cost(rules: dict) -> float:
+    research_mode = (rules.get("research") or {}).get("mode", "demo")
+    if research_mode == "live":
+        if os.getenv("NEAR_AI_API_KEY", "").strip():
+            return max(0.0, float(os.getenv("LIVE_INFERENCE_RESERVE_USD", "0.05")))
+        return 0.0
+    return DEMO_INFERENCE_COST_USD
+
+
 def enforce_order_policy(db: Session, price_usd: float) -> tuple[dict, float]:
     rules = current_rules()
     limits = rules["limits"]
@@ -48,7 +58,7 @@ def enforce_order_policy(db: Session, price_usd: float) -> tuple[dict, float]:
         .where(Order.status != "rejected")
     ) or 0.0
 
-    estimated_cost = DEMO_INFERENCE_COST_USD
+    estimated_cost = estimated_inference_cost(rules)
     daily_limit = float(limits["max_inference_spend_per_day"])
     if float(spent_today) + estimated_cost > daily_limit:
         raise PolicyViolation(
