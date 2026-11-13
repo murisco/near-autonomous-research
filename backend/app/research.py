@@ -12,6 +12,7 @@ from .research_sources import (
     collect_defillama_context,
     collect_nearblocks_activity,
     collect_official_near_context,
+    collect_near_agent_projects,
 )
 
 
@@ -102,7 +103,7 @@ def _activity_summary(activity: dict) -> str:
         change_text = "not available" if change is None else format(change, "+.2f") + "%"
         lines.append(
             f"- **{title}:** {metric.get('latest_day_value'):,.0f} on {metric.get('latest_day')}; "
-            f"{metric.get('last_7d_total'):,.0f} across {metric.get('last_7d_days')} reported days; "
+            f"{metric.get('last_7d_total'):,.0f} summed daily counts across {metric.get('last_7d_days')} reported days (not deduplicated across days); "
             f"7-day change vs previous 7 days: {change_text}."
         )
     return "\n".join(lines)
@@ -232,10 +233,11 @@ async def generate_live_report(
     chain_task = collect_defillama_context(topic, default_chain)
     activity_task = collect_nearblocks_activity()
     official_task = collect_official_near_context()
+    projects_task = collect_near_agent_projects()
 
     chain_context = await chain_task
-    activity_result, official_result = await __import__("asyncio").gather(
-        activity_task, official_task, return_exceptions=True
+    activity_result, official_result, projects_result = await __import__("asyncio").gather(
+        activity_task, official_task, projects_task, return_exceptions=True
     )
     activity = (
         activity_result if isinstance(activity_result, dict)
@@ -263,10 +265,12 @@ async def generate_live_report(
         }
     )
 
+    projects = projects_result if isinstance(projects_result, dict) else {"status": "unavailable", "projects": [], "reason": "GitHub discovery request failed."}
     research_context = {
         "defillama": chain_context,
         "nearblocks": activity,
         "official_near": official,
+        "near_agent_projects_github": projects,
     }
     ai_analysis, ai_meta = await generate_near_ai_analysis(topic, research_context)
     data_mode = "near_ai_live" if ai_analysis else "defillama_live"
@@ -311,6 +315,7 @@ async def generate_live_report(
         (chain_context.get("sources") or [])
         + (activity.get("sources") or [])
         + (official.get("sources") or [])
+        + ([projects.get("source")] if projects.get("source") else [])
     ))
     sources_markdown = "\n".join("- " + source for source in sources)
     warning_markdown = (
@@ -323,6 +328,23 @@ async def generate_live_report(
         else "not configured" if ai_status == "not_configured"
         else "unavailable; deterministic fallback used"
     )
+
+    project_rows = projects.get("projects") or []
+    if project_rows:
+        project_markdown = "\n".join(
+            "- **{name}** — {description}. GitHub: {stars} stars, {forks} forks, {language}; last pushed {pushed}. [Repository]({url})".format(
+                name=item.get("name") or "Unnamed repository",
+                description=item.get("description") or "No repository description supplied",
+                stars=item.get("stars") if item.get("stars") is not None else "n/a",
+                forks=item.get("forks") if item.get("forks") is not None else "n/a",
+                language=item.get("language") or "not specified",
+                pushed=item.get("last_pushed_at") or "not available",
+                url=item.get("url") or "https://github.com",
+            ) for item in project_rows
+        )
+    else:
+        project_markdown = "- No project repositories were returned by GitHub search in this run."
+    project_note = "GitHub metadata is a discovery signal only. It does not prove deployment, active agents, production users, paying customers, or revenue. Repository descriptions are owner supplied and require independent verification."
 
     title = "MERIDIAN NEAR Ecosystem Intelligence: " + chain + " — " + topic[:55]
     body = f"""# {title}
@@ -376,13 +398,18 @@ The current model catalogue distinguishes Confidential TEE, third-party Confiden
 
 **MERIDIAN integration boundary:** the product has only a community Tidepool dry-quote preview. It has not created a deposit address, accepted customer payment, submitted a transaction, or settled a NEAR Intents swap. The official NEAR Intents 1Click API has no testnet version; never describe Tidepool as an official NEAR testnet.
 
-## 6. Commercial opportunities
+## 6. NEAR agent project and developer evidence
+{project_markdown}
+
+{project_note}
+
+## 7. Commercial opportunities
 - **Paid research:** package source-backed chain and ecosystem analysis into reports with clear freshness, evidence, and methodology.
 - **Agent inference:** use NEAR AI Cloud for evidence synthesis where a configured model tier meets the data-handling requirements.
 - **Intent-based settlement:** a future payment adapter can use NEAR Intents for supported cross-chain payments, but only after an owner-approved mainnet flow, quote verification, wallet custody, settlement monitoring, and refund handling are implemented.
 - **Contributor economics:** automate accounting only after payment settlement is proven; until then revenue shares remain projections.
 
-## 7. Risks and open questions
+## 8. Risks and open questions
 - TVL is a capital-deposit measure, not a count of customers, transactions, fees, or protocol revenue.
 - Protocol-level TVL rows can overlap; they must not be summed unless the data provider confirms they are non-overlapping.
 - Official ecosystem headline figures have publisher-defined methodology and a separate data cut-off that must be checked before investment-grade use.
@@ -390,7 +417,8 @@ The current model catalogue distinguishes Confidential TEE, third-party Confiden
 - NEAR AI privacy guarantees depend on the selected model tier.
 - A live source snapshot does not establish repeat customers, revenue, retention, or willingness to pay for MERIDIAN's reports.
 
-## 8. Data quality checks
+## 9. Data quality checks
+- GitHub project discovery: {projects.get('status', 'unavailable')}; {len(project_rows)} repositories returned.
 {warning_markdown}
 
 ## Sources
