@@ -227,20 +227,23 @@ def add_event(db: Session, order_id: str, event_type: str, details: dict) -> Non
     )
 
 
-def serialize_order(order: Order, include_report: bool = False) -> dict:
+def serialize_order(order: Order, include_report: bool = False, admin: bool = False) -> dict:
     payload = {
         "id": order.id,
         "topic": order.topic,
-        "buyer_email": order.buyer_email,
         "price_usd": round(order.price_usd, 2),
-        "inference_cost_usd": round(order.inference_cost_usd, 2),
-        "projected_profit_usd": round(order.projected_profit_usd, 2),
-        "operator_share_usd": round(order.operator_share_usd, 2),
-        "contributor_share_usd": round(order.contributor_share_usd, 2),
         "status": order.status,
         "data_mode": order.data_mode,
         "created_at": order.created_at.isoformat() + "Z",
     }
+    if admin:
+        payload.update({
+            "buyer_email": order.buyer_email,
+            "inference_cost_usd": round(order.inference_cost_usd, 2),
+            "projected_profit_usd": round(order.projected_profit_usd, 2),
+            "operator_share_usd": round(order.operator_share_usd, 2),
+            "contributor_share_usd": round(order.contributor_share_usd, 2),
+        })
     if include_report and order.report:
         payload["report"] = {
             "id": order.report.id,
