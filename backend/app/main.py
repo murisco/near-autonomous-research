@@ -18,10 +18,10 @@ from .research import ResearchSourceError, generate_report
 from .schemas import DemoRunRequest, OrderCreate
 
 app = FastAPI(
-    title="Autonomous Onchain Intelligence Business API",
+    title="MERIDIAN Autonomous Intelligence Business API",
     description=(
-        "Hackathon MVP API for report orders, business policy, projected accounting, "
-        "and a transparent off-chain audit ledger. The current research provider is demo-only."
+        "API for MERIDIAN report orders, source-backed research, business policy, projected accounting, "
+        "and an off-chain audit ledger. Payment settlement and payouts are not enabled."
     ),
     version="0.1.0",
 )
@@ -195,7 +195,7 @@ async def process_order(db: Session, request: OrderCreate) -> dict:
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "service": "autonomous-onchain-intelligence-api", "version": "0.1.0"}
+    return {"ok": True, "service": "meridian-api", "version": "0.1.0"}
 
 
 @app.get("/api/rules")
@@ -223,6 +223,7 @@ def dashboard(db: Session = Depends(get_db)) -> dict:
         .where(Order.created_at >= today_start)
     ) or 0.0
     rules = load_business_rules()
+    latest_order = db.scalar(select(Order).order_by(Order.created_at.desc()).limit(1))
     return {
         "orders": orders_count,
         "reports_generated": reports_count,
@@ -234,8 +235,9 @@ def dashboard(db: Session = Depends(get_db)) -> dict:
         "today_inference_spend_usd": round(float(today_spend), 2),
         "payments_enabled": bool(rules["safety"]["payments_enabled"]),
         "mainnet_execution_enabled": bool(rules["safety"]["mainnet_execution_enabled"]),
-        "data_mode": "synthetic_demo",
+        "data_mode": latest_order.data_mode if latest_order else "no_orders",
         "research_mode": (rules.get("research") or {}).get("mode", "demo"),
+        "near_ai_cloud_configured": bool(os.getenv("NEAR_AI_API_KEY", "").strip()),
     }
 
 
