@@ -336,7 +336,7 @@ async def collect_defillama_context(topic: str, default_chain: str = "Near") -> 
     }
 
 
-STABLECOINS_BASE = "https://stablecoins.llama.fi"
+STABLECOINS_BASE = DEFILLAMA_BASE + "/stablecoins"
 
 
 def _stablecoin_usd_value(value: Any) -> float | None:
