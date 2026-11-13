@@ -121,5 +121,6 @@ The backend CI compiles the application, runs the backend tests, and smoke-check
 - Track: Autonomous Business (`business`).
 - Public repository: https://github.com/murisco/near-autonomous-research
 - Demo hosting: https://meridian-dashboard.up.railway.app
+- Submission description and judge demo script: `docs/hackathon-submission.md`.
 
 MERIDIAN is explicit about the difference between live public data, publisher-reported metrics, AI analysis, quote previews, and actual onchain settlement.
