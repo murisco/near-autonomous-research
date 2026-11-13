@@ -202,4 +202,9 @@ def test_chain_selector_does_not_match_stable_inside_stablecoin():
     )
 
     assert selected == "Near"
+    assert select_chain_from_topic(
+        "Analyse the NEAR ecosystem and confirm it is NEAR, not Stable.",
+        names,
+        "Near",
+    ) == "Near"
     assert select_chain_from_topic("Analyse Stable chain TVL", names, "Near") == "Stable"
