@@ -296,7 +296,6 @@ def _customer_summary(topic: str, chain_context: dict, activity: dict, stablecoi
     addresses = activity.get("address_stats") or {}
     tx_change = tx.get("last_7d_vs_previous_7d_percent") if tx.get("status") == "available" else None
     address_change = addresses.get("last_7d_vs_previous_7d_percent") if addresses.get("status") == "available" else None
-    stable_7d = stablecoins.get("change_7d_percent") if stablecoins.get("status") == "available" else None
     stable_30d = stablecoins.get("change_30d_percent") if stablecoins.get("status") == "available" else None
 
     if any(word in question for word in ("defi", "protocol", "lending", "dex")):
@@ -324,7 +323,7 @@ def _customer_summary(topic: str, chain_context: dict, activity: dict, stablecoi
             "",
             "A proper performance comparison should add protocol-level 7-day and 30-day TVL changes, fees, revenue, volume, and user activity. Until those are available, treat the table as a size comparison rather than a performance league table.",
         ])
-        return "\\n".join(lines)
+        return "\n".join(lines)
 
     tx_text = _metric_change(tx_change) if tx_change is not None else "not available"
     address_text = _metric_change(address_change) if address_change is not None else "not available"
@@ -332,7 +331,6 @@ def _customer_summary(topic: str, chain_context: dict, activity: dict, stablecoi
     tvl_text = _metric_change(tvl_30d)
     activity_up = (tx_change is not None and tx_change > 0) or (address_change is not None and address_change > 0)
     tvl_down = tvl_30d is not None and tvl_30d < 0
-    stable_up = stable_30d is not None and stable_30d > 0
 
     if tvl_down and activity_up:
         verdict = (
