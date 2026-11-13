@@ -4,7 +4,6 @@ from pydantic import BaseModel, Field, field_validator
 class OrderCreate(BaseModel):
     topic: str = Field(min_length=8, max_length=500)
     price_usd: float = Field(default=10.0, gt=0, le=10000)
-    buyer_email: str | None = Field(default=None, max_length=320)
     buyer_account_id: str | None = Field(default=None, max_length=128)
 
     @field_validator("topic")
@@ -36,6 +35,6 @@ class NearAuthVerifyRequest(BaseModel):
         import re
 
         value = value.strip().lower()
-        if not re.fullmatch(r"[a-z0-9._-]{2,64}", value):
+        if not re.fullmatch(r"[a-z0-9]+(?:[._-][a-z0-9]+)*", value):
             raise ValueError("Enter a valid NEAR account ID.")
         return value
