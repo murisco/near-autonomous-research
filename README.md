@@ -1,57 +1,111 @@
-# Autonomous Research Business
+# NOVA — Autonomous Onchain Intelligence Business
 
-An autonomous onchain intelligence business built for the NEAR Hackathon 2026 (Autonomous Business track).
+An AI-native onchain research business built for the NEAR Hackathon 2026 (Autonomous Business track).
 
-The product is designed to research blockchain projects, produce paid intelligence reports, account for operating costs, and distribute revenue according to human-defined rules.
+NOVA is designed to turn customer research requests into structured blockchain intelligence reports, manage the cost of producing them, calculate revenue shares, and maintain an auditable record of business activity.
 
-## Current status
+## Current build status
 
-Early scaffold. The repository currently documents the product and its safety constraints. Payment execution, live research integrations, and automated payouts are not yet implemented.
+The first end-to-end **demo workflow** is implemented:
+
+- A customer submits a research question and report quote.
+- Human-defined rules validate the minimum price, daily inference budget, kill switch, and revenue split.
+- A clearly labelled synthetic demo provider generates a report preview.
+- The accounting logic calculates estimated inference cost, projected profit, and the 80/20 split.
+- Every workflow step is written to an off-chain audit ledger.
+- The web dashboard displays orders, reports, business metrics, and audit events.
+
+**Not yet implemented:** live blockchain data retrieval, NEAR AI Cloud inference, NEAR Intents execution, actual payment collection, onchain treasury operations, and real payouts. The current demo does not claim to perform any of those actions.
 
 ## Product workflow
 
-1. A customer requests an onchain research report.
-2. The business validates the request and checks pricing and budget rules.
-3. A research agent gathers source-backed onchain and ecosystem information.
-4. The report engine produces a report and records its provenance.
-5. The customer receives a payment quote. Payment execution is only enabled after the relevant integration and explicit operator approval.
-6. The treasury engine records revenue, inference costs, contributor allocations, and net operating balance.
-7. Every business event is recorded in an auditable ledger.
+1. A customer requests an onchain intelligence report.
+2. The business checks pricing, spending limits, and the kill switch.
+3. The research provider generates a report. The current provider is synthetic demo data; live source adapters are a future integration.
+4. A payment quote is represented as a simulation-only event.
+5. The accounting engine calculates projected costs and revenue shares. Unpaid quotes are not counted as collected revenue.
+6. The business records each step in its off-chain audit ledger.
 
 ## Architecture
 
-- **Web app:** customer order flow and business operations dashboard.
-- **Business API:** order lifecycle, orchestration, policy checks, and report delivery.
-- **Research worker:** source collection, analysis, citations, and report generation.
-- **Treasury service:** budget enforcement, cost accounting, and revenue-split calculations.
-- **NEAR adapter:** NEAR AI Cloud integration and NEAR Intents payment quotes/settlement.
-- **PostgreSQL:** orders, reports, policy configuration, accounting entries, and audit events.
+- **Dashboard:** Next.js operator control room and research order interface.
+- **Business API:** FastAPI order lifecycle, orchestration, business policy, and report delivery.
+- **Database:** SQLAlchemy models, SQLite for local development, and PostgreSQL support for deployment.
+- **Policy engine:** YAML business rules with daily inference budget, report price floor, revenue split, and kill switch.
+- **Research provider:** synthetic demo provider today; source-backed chain research and NEAR AI Cloud adapter are planned.
+- **NEAR adapter:** NEAR AI Cloud and NEAR Intents integration are planned; no live calls are made by this demo build.
 
 ## Human-defined operating rules
 
-The business must enforce these rules before any paid or irreversible action:
+The business enforces:
 
 - Maximum inference spend per day.
 - Minimum price per report.
 - Revenue split percentages that total 100%.
-- A kill switch that stops new work and all payment execution.
-- Explicit human approval for mainnet transfers, payouts, or other irreversible actions.
+- A kill switch to pause new orders.
+- Human approval for payouts and irreversible actions.
 
-Secrets belong in environment variables and must never be committed to the repository. Use `.env.example` for variable names and placeholders only.
-
-## NEAR integration and demo safety
-
-NEAR Intents does not provide a testnet. The initial demo should use dry-run payment quotes and clearly labelled simulated accounting events. Never present simulated transfers as completed onchain transactions. Any mainnet payment path must remain disabled until configured and explicitly approved by the operator.
-
-NEAR account keys must not be stored in plaintext in this repository. Use an appropriate scoped key or custody integration, and verify current contract addresses, endpoints, and SDK versions against official documentation rather than guessing.
+The current example values in `config/business-rules.yaml` are for the hackathon demo only. Review them before any real operation. Payments and mainnet execution remain disabled.
 
 ## Local development
 
-Setup instructions will be added alongside the application code. Do not assume a live payment integration exists until it is implemented and tested.
+### 1. Start the API
+
+From the repository root:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+uvicorn backend.app.main:app --reload --port 8000
+```
+
+The API will be available at `http://localhost:8000`. Interactive API documentation is at `http://localhost:8000/docs`.
+
+The default database is a local SQLite file named `data.db`. Set `DATABASE_URL` to a PostgreSQL URL to use PostgreSQL instead.
+
+### 2. Start the dashboard
+
+In a second terminal:
+
+```bash
+cd frontend
+npm install
+BACKEND_URL=http://localhost:8000 npm run dev
+```
+
+Open `http://localhost:3000`. The Next.js API proxy forwards dashboard requests to the backend using the server-side `BACKEND_URL` variable.
+
+### 3. Run the automated tests
+
+From the repository root:
+
+```bash
+python -m compileall -q backend
+pytest -q
+```
+
+GitHub Actions also runs the backend test suite on pushes and pull requests to `main`.
+
+## Demo safety and accounting
+
+- Research output is labelled `synthetic_demo`; it is not live chain analysis.
+- Payment quotes are simulations only. No payment provider or NEAR Intents endpoint is called.
+- Unpaid orders count toward quoted sales, not collected revenue.
+- Inference costs and revenue shares are projections, not real transfers.
+- The audit ledger is currently off-chain and stored in the application database.
+- Payments, mainnet execution, and payouts remain disabled.
+
+NEAR account keys must never be stored in plaintext in this repository. Verify current contract addresses, endpoints, and SDK versions against official NEAR documentation before integrating them.
 
 ## Judge walkthrough
 
-The completed README will provide numbered **“do X, see Y”** instructions. Each step will identify the expected result and distinguish simulated demo events from verifiable onchain transactions.
+1. Start the backend and dashboard using the commands above.
+2. Submit a research question from the Research Desk.
+3. Open the generated report and confirm its synthetic-demo notice.
+4. Review the quoted sale, estimated inference cost, projected profit, and configured revenue split.
+5. Open the audit ledger and inspect the order, research, report, quote, and accounting events.
+6. Confirm that collected revenue remains zero and payments/mainnet execution remain disabled.
 
 ## Hackathon
 
