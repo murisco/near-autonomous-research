@@ -24,7 +24,7 @@ def test_demo_order_generates_report_and_audit_events():
 
         ledger = client.get("/api/ledger").json()
         event_types = {event["event_type"] for event in ledger["items"]}
-        assert "demo_report_generated" in event_types
+        assert "report_generated" in event_types
         assert "simulated_payment_quote_created" in event_types
         assert "projected_accounting_recorded" in event_types
 
