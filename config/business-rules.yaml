@@ -11,9 +11,9 @@ revenue_split:
   contributors_percent: 20
 
 research:
-  # "demo" uses clearly labelled synthetic data.
+  # Live mode uses source-backed public chain data.
   # Set to "live" to query DefiLlama and optionally use NEAR AI Cloud.
-  mode: demo
+  mode: live
   default_chain: Near
 
 safety:
