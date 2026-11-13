@@ -131,11 +131,12 @@ export default function Home() {
     setNotice("");
     setSelectedReport(null);
     try {
-      const result = await api<Order & { report: Report }>("orders", {
+      const result = await api<Order & { report: Report; payment_quote?: PaymentQuote }>("orders", {
         method: "POST",
         body: JSON.stringify({ topic, price_usd: Number(price) }),
       });
       setSelectedReport(result.report);
+      setPaymentQuote(result.payment_quote ?? null);
       setNotice(result.data_mode === "synthetic_demo" ? "Demo report generated. No payment was taken and no blockchain transaction was sent." : "Live-source research report generated. No payment was taken and no blockchain transaction was sent.");
       await refresh();
     } catch (err) {
@@ -148,8 +149,11 @@ export default function Home() {
   async function openReport(orderId: string) {
     setError("");
     try {
-      const result = await api<Order & { report?: Report }>("orders/" + orderId);
-      if (result.report) setSelectedReport(result.report);
+      const result = await api<Order & { report?: Report; payment_quote?: PaymentQuote }>("orders/" + orderId);
+      if (result.report) {
+        setSelectedReport(result.report);
+        setPaymentQuote(result.payment_quote ?? null);
+      }
       else setError("This order does not have a report attached.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load the report.");
