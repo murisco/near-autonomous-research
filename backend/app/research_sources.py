@@ -314,7 +314,7 @@ async def collect_defillama_context(topic: str, default_chain: str = "Near") -> 
     }
 
 
-STABLECOINS_BASE = "https://stablecoins.llama.fi"
+STABLECOINS_BASE = DEFILLAMA_BASE
 
 
 def _stablecoin_usd_value(value: Any) -> float | None:
@@ -391,7 +391,7 @@ async def collect_stablecoin_context(chain: str = "Near") -> dict:
             if not any(str(value).casefold() == target for value in chain_names):
                 continue
             continue
-        current_block = matching.get("current") if isinstance(matching, dict) else matching
+        current_block = matching.get("circulating", matching.get("current")) if isinstance(matching, dict) else matching
         current_value = _stablecoin_usd_value(current_block)
         if current_value is None or current_value <= 0:
             continue
