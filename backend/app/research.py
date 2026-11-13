@@ -384,7 +384,7 @@ def _customer_summary(topic: str, chain_context: dict, activity: dict, stablecoi
         "",
         "**Important timeframe:** these are recent 7-day and 30-day comparisons from the latest retrieved snapshot. They are not a complete January-to-November 2026 year-to-date comparison. A full-year conclusion needs comparable monthly history.",
     ]
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | None, dict]:
