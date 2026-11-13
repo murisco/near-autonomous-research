@@ -235,6 +235,7 @@ def dashboard(db: Session = Depends(get_db)) -> dict:
         "payments_enabled": bool(rules["safety"]["payments_enabled"]),
         "mainnet_execution_enabled": bool(rules["safety"]["mainnet_execution_enabled"]),
         "data_mode": "synthetic_demo",
+        "research_mode": (rules.get("research") or {}).get("mode", "demo"),
     }
 
 
