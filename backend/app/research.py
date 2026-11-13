@@ -286,6 +286,109 @@ def _adoption_verdict(chain_context: dict, activity: dict, stablecoins: dict, pr
     return "\n".join(["- " + item for item in evidence] + ["", conclusion])
 
 
+def _customer_summary(topic: str, chain_context: dict, activity: dict, stablecoins: dict) -> str:
+    """Build a plain-English answer from the metrics actually returned by sources."""
+    question = topic.lower()
+    tvl = chain_context.get("current_tvl_usd")
+    tvl_7d = chain_context.get("change_7d_percent")
+    tvl_30d = chain_context.get("change_30d_percent")
+    tx = activity.get("transaction_stats") or {}
+    addresses = activity.get("address_stats") or {}
+    tx_change = tx.get("last_7d_vs_previous_7d_percent") if tx.get("status") == "available" else None
+    address_change = addresses.get("last_7d_vs_previous_7d_percent") if addresses.get("status") == "available" else None
+    stable_7d = stablecoins.get("change_7d_percent") if stablecoins.get("status") == "available" else None
+    stable_30d = stablecoins.get("change_30d_percent") if stablecoins.get("status") == "available" else None
+
+    if any(word in question for word in ("defi", "protocol", "lending", "dex")):
+        rows = chain_context.get("top_protocols") or []
+        lines = [
+            "The largest protocols can be compared by reported TVL, but TVL alone does not tell us which protocol is performing best. It measures capital deposited, not revenue, users, trading volume, or risk-adjusted returns.",
+            "",
+            "| Protocol | Category | Reported TVL |",
+            "|---|---|---:|",
+        ]
+        for row in rows[:5]:
+            lines.append(
+                "| {name} | {category} | {value} |".format(
+                    name=row.get("name", "Unknown"),
+                    category=row.get("category", "Unclassified"),
+                    value=_usd(row.get("chain_tvl_usd")),
+                )
+            )
+        if not rows:
+            lines.append("| No eligible protocol rows | — | Not available |")
+        lines.extend([
+            "",
+            "**What we can conclude:** this snapshot identifies the largest reported capital pools, not the strongest performers.",
+            "**What we cannot conclude yet:** protocol gainers and losers. This run does not have comparable historical TVL series for each protocol, so ranking them by growth would be guesswork.",
+            "",
+            "A proper performance comparison should add protocol-level 7-day and 30-day TVL changes, fees, revenue, volume, and user activity. Until those are available, treat the table as a size comparison rather than a performance league table.",
+        ])
+        return "\\n".join(lines)
+
+    tx_text = _metric_change(tx_change) if tx_change is not None else "not available"
+    address_text = _metric_change(address_change) if address_change is not None else "not available"
+    stable_text = _metric_change(stable_30d) if stable_30d is not None else "not available"
+    tvl_text = _metric_change(tvl_30d)
+    activity_up = (tx_change is not None and tx_change > 0) or (address_change is not None and address_change > 0)
+    tvl_down = tvl_30d is not None and tvl_30d < 0
+    stable_up = stable_30d is not None and stable_30d > 0
+
+    if tvl_down and activity_up:
+        verdict = (
+            "NEAR is showing **mixed signals, not clear broad-based growth**. Recent network activity is higher, "
+            "but DeFi TVL is lower over the 30-day period. More transactions and daily address activity are encouraging, "
+            "yet they do not prove that more people are using valuable apps or that more capital is being retained."
+        )
+    elif tvl_down:
+        verdict = (
+            "The available indicators lean **weaker on DeFi capital**, while the activity evidence is either mixed or incomplete. "
+            "This is not enough to conclude that the whole NEAR ecosystem is declining."
+        )
+    elif activity_up and (tvl_30d is not None and tvl_30d > 0):
+        verdict = (
+            "The available indicators point to **positive recent momentum** in both network activity and DeFi capital. "
+            "That is encouraging, but it is not by itself proof of sustained user or economic growth."
+        )
+    else:
+        verdict = (
+            "The evidence is **mixed or incomplete**. The available snapshot does not support a confident claim that NEAR is broadly growing or declining."
+        )
+
+    lines = [
+        verdict,
+        "",
+        "| Indicator | Latest reading | Change | What it tells us |",
+        "|---|---:|---:|---|",
+        "| Chain DeFi TVL | {value} | 7d {seven}; 30d {thirty} | Capital recorded in tracked DeFi protocols |".format(
+            value=_usd(tvl), seven=_metric_change(tvl_7d), thirty=tvl_text
+        ),
+        "| Daily transactions | {value} | 7d comparison {change} | Network activity, not necessarily unique users |".format(
+            value=(format(tx.get("latest_day_value"), ",.0f") if tx.get("status") == "available" and tx.get("latest_day_value") is not None else "Not available"),
+            change=tx_text,
+        ),
+        "| Daily active-address metric | {value} | 7d comparison {change} | Daily address counts; not a count of unique people across the week |".format(
+            value=(format(addresses.get("latest_day_value"), ",.0f") if addresses.get("status") == "available" and addresses.get("latest_day_value") is not None else "Not available"),
+            change=address_text,
+        ),
+        "| Stablecoin supply | {value} | 30d {change} | Stablecoin supply, not trading volume or available DEX liquidity |".format(
+            value=(_usd(stablecoins.get("total_supply_usd")) if stablecoins.get("status") == "available" else "Not available"),
+            change=stable_text,
+        ),
+        "",
+        "### How to read this",
+        "- **Activity:** higher transaction and daily address counts are positive usage signals. They can still include automated activity and do not establish how many distinct people returned.",
+        "- **TVL:** falling TVL means less dollar value is recorded in tracked DeFi deposits. Price movements and withdrawals can both affect it; this dataset does not establish the cause.",
+        "- **Stablecoins:** a small rise in supply is a supportive liquidity signal, but supply alone does not show that the assets are being actively used.",
+        "",
+        "### Overall judgement",
+        "The fairest reading is that **short-term network activity has improved, while DeFi capital has weakened**. Calling NEAR a clear growth story would overlook the TVL decline; calling the whole ecosystem a decline would overlook the activity gains.",
+        "",
+        "**Important timeframe:** these are recent 7-day and 30-day comparisons from the latest retrieved snapshot. They are not a complete January-to-November 2026 year-to-date comparison. A full-year conclusion needs comparable monthly history.",
+    ]
+    return "\\n".join(lines)
+
+
 async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | None, dict]:
     api_key = os.getenv("NEAR_AI_API_KEY", "").strip()
     if not api_key:
@@ -296,18 +399,20 @@ async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | No
     payload = {
         "model": model,
         "temperature": 0.15,
-        "max_tokens": 2200,
+        "max_tokens": 900,
         "messages": [
             {
                 "role": "system",
                 "content": (
-                    "You are MERIDIAN's evidence-led onchain research analyst. Use only the supplied "
+                    "You are MERIDIAN's customer-facing blockchain research analyst. Use only the supplied "
                     "research context. Never invent a metric, project capability, source, event, date, "
                     "or adoption claim. Keep publisher-reported figures separate from independently "
-                    "queried data. Explain missing data and methodological conflicts. Never add protocol "
-                    "TVL rows together unless the source explicitly guarantees they are non-overlapping. "
-                    "Separate verified observations, interpretation, opportunities, and risks. Cite the "
-                    "provided source names inline. If evidence is insufficient, say so plainly."
+                    "queried data. Never add protocol TVL rows together unless the source explicitly "
+                    "guarantees they are non-overlapping. Answer the customer's exact question first in "
+                    "plain English. Explain what each important metric means, what it does not prove, "
+                    "and where the evidence is incomplete. Do not discuss MERIDIAN's own deployment, "
+                    "payments, internal business model, or unrelated NEAR products unless the question "
+                    "asks about them. Keep the answer focused and under 220 words. Cite source names inline."
                 ),
             },
             {
@@ -425,17 +530,7 @@ async def generate_live_report(
     if ai_analysis:
         analysis = ai_analysis
     else:
-        analysis = (
-            "NEAR has two relevant infrastructure pillars documented in the official sources: "
-            "NEAR AI Cloud provides an OpenAI-compatible inference API with model-dependent privacy tiers, "
-            "while NEAR Intents 1Click provides an intent-based cross-chain quote, deposit, and execution flow. "
-            "The public sources retrieved for this report do not establish that MERIDIAN has processed customer "
-            "payments or that its target AI-agent ecosystem has a particular number of active agents. "
-            "Network activity is reported separately below where NearBlocks returned recognisable daily metrics. "
-            "The official ecosystem and Intents homepage figures are publisher-reported, not independently "
-            "reconstructed. These observations support building a research-and-settlement business, but do not "
-            "by themselves prove product demand or paying customer adoption."
-        )
+        analysis = _customer_summary(topic, chain_context, activity, stablecoins)
 
     quality_warnings = chain_context.get("quality_warnings") or []
     if activity.get("status") != "available":
@@ -492,8 +587,12 @@ async def generate_live_report(
 ## Research question
 {topic}
 
-## Executive analysis
+## The answer
 {analysis}
+
+## Research evidence & methodology
+
+The following sections contain the detailed source data and methodology behind the customer summary. They are available for readers who want to audit the figures.
 
 ## 1. DeFi capital: chain TVL
 - **Chain:** {chain}
