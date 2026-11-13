@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, time, timedelta
-from uuid import uuid4\nimport secrets\nimport hmac
+from uuid import uuid4
+import secrets
+import hmac
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,7 +18,11 @@ from .models import AuditEvent, AuthSession, EmailLoginCode, Order, Report
 from .payments import create_tidepool_dry_quote
 from .policy import PolicyViolation, enforce_order_policy
 from .research import ResearchSourceError, generate_report
-from .schemas import DemoRunRequest, EmailCodeRequest, OrderCreate, VerifyEmailCodeRequest\nfrom .auth import (\n    LOGIN_CODE_TTL_MINUTES, SESSION_COOKIE, SESSION_TTL_SECONDS,\n    code_digest, deliver_login_code, is_admin_email, secure_cookie, token_digest,\n)
+from .schemas import DemoRunRequest, EmailCodeRequest, OrderCreate, VerifyEmailCodeRequest
+from .auth import (
+    LOGIN_CODE_TTL_MINUTES, SESSION_COOKIE, SESSION_TTL_SECONDS,
+    code_digest, deliver_login_code, is_admin_email, secure_cookie, token_digest,
+)
 
 app = FastAPI(
     title="MERIDIAN Autonomous Intelligence Business API",
