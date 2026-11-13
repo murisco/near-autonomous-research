@@ -23,7 +23,7 @@ NEAR_INTENTS_QUICKSTART_URL = (
     "1click-api/quickstart/introduction.md"
 )
 NEAR_INTENTS_EXPLORER_URL = "https://explorer.near-intents.org/api/v0/transactions"
-NEAR_AI_DEFAULT_MODEL = "zai-org/GLM-5.1-FP8"
+NEAR_AI_DEFAULT_MODEL = "z-ai/glm-5.3-flash"
 
 EXCLUDED_TVL_CATEGORIES = {
     "cex", "centralized exchange", "bridge", "liquid staking", "staking",

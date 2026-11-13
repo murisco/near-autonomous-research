@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 
 import httpx
@@ -286,9 +287,128 @@ def _adoption_verdict(chain_context: dict, activity: dict, stablecoins: dict, pr
     return "\n".join(["- " + item for item in evidence] + ["", conclusion])
 
 
-def _customer_summary(topic: str, chain_context: dict, activity: dict, stablecoins: dict) -> str:
-    """Build a plain-English answer from the metrics actually returned by sources."""
+def _is_defi_protocol_question(topic: str) -> bool:
+    """Only route explicitly DeFi-focused questions to the protocol TVL table.
+
+    The phrase "NEAR Protocol" names the blockchain and must not, by itself,
+    trigger a DeFi answer.
+    """
     question = topic.lower()
+    if re.search(r"\b(?:defi|decentralized finance|lending|dex|decentralized exchange|liquidity pool|yield farming)\b", question):
+        return True
+    asks_protocol_tvl = (
+        re.search(r"\b(?:top|largest|biggest|leading)\s+(?:\d+\s+)?(?:near\s+)?protocols?\b", question)
+        and re.search(r"\btvl\b", question)
+    )
+    return bool(asks_protocol_tvl)
+
+
+def _is_ecosystem_challenge_question(topic: str) -> bool:
+    question = topic.lower()
+    return any(
+        term in question
+        for term in (
+            "challenge",
+            "risk",
+            "scalability",
+            "adoption",
+            "developer activity",
+            "token economics",
+            "competition",
+            "competitive",
+        )
+    )
+
+
+def _ecosystem_challenge_summary(
+    chain_context: dict,
+    activity: dict,
+    stablecoins: dict,
+    official: dict,
+    projects: dict,
+) -> str:
+    """Answer ecosystem challenge questions without claiming uncollected metrics."""
+    transaction = activity.get("transaction_stats") or {}
+    addresses = activity.get("address_stats") or {}
+    tx_change = transaction.get("last_7d_vs_previous_7d_percent")
+    address_change = addresses.get("last_7d_vs_previous_7d_percent")
+    tvl_change = chain_context.get("change_30d_percent")
+    stable_change = stablecoins.get("change_30d_percent")
+    scanned_projects = len(projects.get("projects") or [])
+    agent_candidates = len(projects.get("autonomous_ai_agent_candidates") or [])
+    infrastructure_candidates = len(projects.get("agent_infrastructure") or [])
+
+    def metric(value: float | None) -> str:
+        return "not available" if value is None else _metric_change(value)
+
+    evidence = [
+        "- **User adoption:** daily transactions are "
+        + (f"{transaction.get('latest_day_value'):,.0f}" if transaction.get("status") == "available" and transaction.get("latest_day_value") is not None else "not available")
+        + f"; the 7-day comparison is {metric(tx_change)}. Daily active-address comparison is {metric(address_change)}. These are activity signals, not verified unique people or retention.",
+        "- **DeFi capital:** chain TVL is "
+        + _usd(chain_context.get("current_tvl_usd"))
+        + f", with a 30-day change of {metric(tvl_change)}. TVL can move with token prices and withdrawals, so it does not prove adoption.",
+        "- **Stablecoins:** 30-day supply change is "
+        + metric(stable_change)
+        + ("." if stablecoins.get("status") == "available" else " (source unavailable)."),
+        "- **Developer activity:** the GitHub scan inspected "
+        + str(scanned_projects)
+        + f" repositories, including {agent_candidates} README-screened AI-agent candidates and {infrastructure_candidates} infrastructure candidates. This is a narrow agent-project sample, not a measure of all NEAR developers.",
+        "- **Scalability, token economics and L1 competition:** this run did not collect comparable throughput/latency, inflation/staking/burn, or cross-chain benchmark data. A confident ranking or claim about current bottlenecks would be unsupported.",
+    ]
+
+    response_facts = []
+    for label, key in (
+        ("NEAR AI and agent infrastructure", "near_ai_documented_facts"),
+        ("NEAR Intents", "near_intents_documented_facts"),
+    ):
+        facts = official.get(key) or []
+        if facts:
+            response_facts.append("- **" + label + ":** " + " ".join(str(item) for item in facts[:2]))
+
+    lines = [
+        "The available evidence is not sufficient to say that NEAR has a confirmed protocol-level scalability failure or that its adoption is accelerating across the whole ecosystem. The clearest conclusion is that important areas still need better, comparable measurement.",
+        "",
+        "### Evidence from this research run",
+        *evidence,
+        "",
+        "### Ecosystem response visible in the sources",
+    ]
+    if response_facts:
+        lines.extend(response_facts)
+        lines.append("- These are documented product directions, not proof that the underlying risks have been solved.")
+    else:
+        lines.append("- Official product-response details could not be verified in this run. Do not infer that a specific roadmap item has shipped.")
+
+    lines.extend([
+        "",
+        "### Three critical risks to monitor",
+        "1. **Usage quality:** transaction growth may not translate into retained users, app revenue or repeat demand.",
+        "2. **Economic sustainability:** token emissions, staking concentration, fee capture and value accrual were not measured here.",
+        "3. **Competitive execution:** without comparable L1 data, NEAR's scaling performance and developer/user retention versus rivals remain unproven.",
+        "",
+        "### Practical growth opportunities",
+        "- Publish consistent chain and app-level dashboards for retained users, fees, revenue, transactions and stablecoin usage.",
+        "- Turn NEAR AI, agent infrastructure and Intents into measurable user workflows, then report repeat usage and settlement outcomes rather than headline announcements.",
+        "- Make developer onboarding easier and track active builders, production deployments and six-month project survival.",
+        "",
+        "**Bottom line:** treat these as evidence gaps and risks to test, not proof that the network is failing. A stronger assessment needs direct scaling benchmarks, tokenomics data and comparable L1 metrics.",
+    ])
+    return "\n".join(lines)
+
+
+def _customer_summary(
+    topic: str,
+    chain_context: dict,
+    activity: dict,
+    stablecoins: dict,
+    official: dict | None = None,
+    projects: dict | None = None,
+) -> str:
+    """Build a question-specific fallback from the metrics actually returned by sources."""
+    question = topic.lower()
+    official = official or {}
+    projects = projects or {}
     tvl = chain_context.get("current_tvl_usd")
     tvl_7d = chain_context.get("change_7d_percent")
     tvl_30d = chain_context.get("change_30d_percent")
@@ -298,7 +418,7 @@ def _customer_summary(topic: str, chain_context: dict, activity: dict, stablecoi
     address_change = addresses.get("last_7d_vs_previous_7d_percent") if addresses.get("status") == "available" else None
     stable_30d = stablecoins.get("change_30d_percent") if stablecoins.get("status") == "available" else None
 
-    if any(word in question for word in ("defi", "protocol", "lending", "dex")):
+    if _is_defi_protocol_question(question):
         rows = chain_context.get("top_protocols") or []
         lines = [
             "The largest protocols can be compared by reported TVL, but TVL alone does not tell us which protocol is performing best. It measures capital deposited, not revenue, users, trading volume, or risk-adjusted returns.",
@@ -324,6 +444,11 @@ def _customer_summary(topic: str, chain_context: dict, activity: dict, stablecoi
             "A proper performance comparison should add protocol-level 7-day and 30-day TVL changes, fees, revenue, volume, and user activity. Until those are available, treat the table as a size comparison rather than a performance league table.",
         ])
         return "\n".join(lines)
+
+    if _is_ecosystem_challenge_question(question):
+        return _ecosystem_challenge_summary(
+            chain_context, activity, stablecoins, official, projects
+        )
 
     tx_text = _metric_change(tx_change) if tx_change is not None else "not available"
     address_text = _metric_change(address_change) if address_change is not None else "not available"
@@ -397,7 +522,7 @@ async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | No
     payload = {
         "model": model,
         "temperature": 0.15,
-        "max_tokens": 900,
+        "max_tokens": 1500,
         "messages": [
             {
                 "role": "system",
@@ -407,22 +532,27 @@ async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | No
                     "or adoption claim. Keep publisher-reported figures separate from independently "
                     "queried data. Never add protocol TVL rows together unless the source explicitly "
                     "guarantees they are non-overlapping. Answer the customer's exact question first in "
-                    "plain English. Explain what each important metric means, what it does not prove, "
+                    "plain English. Follow the exact scope and sub-questions in the request; do not force the same "
+                    "headings or checklist onto every query. The phrase 'NEAR Protocol' means the NEAR blockchain "
+                    "and does not by itself mean the customer is asking about DeFi protocols. Explain what each "
+                    "important metric means, what it does not prove, "
                     "and where the evidence is incomplete. Do not discuss MERIDIAN's own deployment, "
                     "payments, internal business model, or unrelated NEAR products unless the question "
-                    "asks about them. Keep the answer focused and under 220 words. Cite source names inline."
+                    "asks about them. Aim for 250-350 words and cite source names inline."
                 ),
             },
             {
                 "role": "user",
                 "content": (
-                    "Research question: " + topic + "\n\n"
+                    "Customer's exact research question: " + topic + "\n\n"
                     "Verified and publisher-reported source context (JSON):\n"
                     + json.dumps(context, sort_keys=True, ensure_ascii=False)
-                    + "\n\nWrite an executive analysis with: key findings; what the evidence says "
-                    "about real adoption; NEAR AI and agent infrastructure; NEAR Intents and payments; "
-                    "commercial opportunities; risks and open questions; and the next data checks. "
-                    "Do not state unavailable metrics as facts."
+                    + "\n\nAnswer the exact question above. Cover every requested dimension, in "
+                    "the order that makes sense for that question. Use only evidence in the context. "
+                    "When a requested dimension has no data, state that clearly and say what data would "
+                    "be needed; do not replace it with an unrelated metric. Distinguish measured data, "
+                    "publisher-reported claims and analytical judgement. Do not reuse a generic DeFi/TVL "
+                    "answer unless the question explicitly asks about DeFi or protocol TVL."
                 ),
             },
         ],
@@ -528,7 +658,9 @@ async def generate_live_report(
     if ai_analysis:
         analysis = ai_analysis
     else:
-        analysis = _customer_summary(topic, chain_context, activity, stablecoins)
+        analysis = _customer_summary(
+            topic, chain_context, activity, stablecoins, official, projects
+        )
 
     quality_warnings = chain_context.get("quality_warnings") or []
     if activity.get("status") != "available":
@@ -567,6 +699,15 @@ async def generate_live_report(
         else "not configured" if ai_status == "not_configured"
         else "unavailable; deterministic fallback used"
     )
+    ai_status_banner = (
+        f"> **NEAR AI Cloud:** {ai_status_note}.\n"
+        if ai_status == "completed"
+        else (
+            "> **AI analysis notice:** NEAR AI Cloud did not return an analysis for this order. "
+            "The answer below is a deterministic, source-driven fallback, not a model-generated response. "
+            "Some requested areas may remain unanswered. Check the audit record for the failure detail.\n"
+        )
+    )
 
     project_rows = projects.get("projects") or []
     project_markdown, project_counts = _project_groups(projects)
@@ -585,6 +726,7 @@ async def generate_live_report(
 ## Research question
 {topic}
 
+{ai_status_banner}
 ## The answer
 {analysis}
 

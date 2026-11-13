@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 
 from backend.app import research_sources as sources
-
+from backend.app.research import _customer_summary, _is_defi_protocol_question
 from backend.app.research_sources import (
     analyse_tvl_history,
     filter_chain_protocols,
@@ -285,3 +285,38 @@ def test_stablecoin_chain_aggregate_parser_matches_exact_chain_name():
     ]
     assert parse_stablecoin_chain_aggregate(rows, "Near") == 123_456_789
     assert parse_stablecoin_chain_aggregate(rows, "Ethereum") is None
+
+
+
+def test_near_protocol_name_does_not_trigger_defi_tvl_fallback():
+    assert not _is_defi_protocol_question(
+        "What are the biggest challenges currently facing NEAR Protocol, including scalability and competition?"
+    )
+    assert _is_defi_protocol_question(
+        "Identify the top 5 DeFi protocols by TVL on NEAR."
+    )
+    assert _is_defi_protocol_question(
+        "Compare the largest lending protocols on NEAR by TVL."
+    )
+
+
+def test_ecosystem_challenge_fallback_answers_requested_dimensions():
+    answer = _customer_summary(
+        "Assess NEAR Protocol challenges: scalability, adoption, developer activity, token economics and competition.",
+        {"current_tvl_usd": 100_000_000, "change_30d_percent": -3.5},
+        {
+            "transaction_stats": {"status": "available", "latest_day_value": 5000, "last_7d_vs_previous_7d_percent": 4.0},
+            "address_stats": {"status": "unavailable"},
+        },
+        {"status": "unavailable"},
+        {"near_ai_documented_facts": ["NEAR AI supports confidential inference."]},
+        {"projects": [], "autonomous_ai_agent_candidates": [], "agent_infrastructure": []},
+    )
+    assert "Scalability, token economics and L1 competition" in answer
+    assert "Three critical risks" in answer
+    assert "Practical growth opportunities" in answer
+    assert "largest protocols" not in answer
+
+
+def test_near_ai_default_model_uses_current_documented_model_id():
+    assert sources.NEAR_AI_DEFAULT_MODEL == "z-ai/glm-5.3-flash"
