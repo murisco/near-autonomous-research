@@ -1,10 +1,24 @@
-# MERIDIAN — Autonomous Onchain Research Business
+# MERIDIAN — NEAR Ecosystem Intelligence
 
-MERIDIAN is an AI-native research business built for the **NEAR Hackathon 2026 — Autonomous Business track**.
+MERIDIAN is a public, read-only NEAR ecosystem intelligence dashboard built for the **NEAR Hackathon 2026 — Investment Thesis track**.
 
-A customer submits a blockchain research question. MERIDIAN gathers public data, checks source methodology, produces an evidence-led report, estimates delivery costs, and records the order and business decisions in an audit ledger.
+It helps a researcher inspect three connected areas: NEAR network fundamentals, developer activity across selected NEAR-related repositories, and a transparent evidence-based ecosystem assessment. The public dashboard is usable without a wallet, account, payment, or AI-provider credit.
 
-## What the current build does
+**Live dashboard:** https://meridian-dashboard.up.railway.app  
+**Public data endpoint:** https://meridian-dashboard.up.railway.app/api/public/intelligence  
+**Repository:** https://github.com/murisco/near-autonomous-research
+
+## Public product features
+
+1. **NEAR Network Monitor** — live chain TVL and historical observations from DefiLlama, daily transaction and address statistics from NearBlocks where available, and NEAR stablecoin supply from DefiLlama.
+2. **Ecosystem Development Tracker** — GitHub repository discovery, README screening, repository metadata, latest push dates and recent commit messages for a small set of NEAR-related candidates.
+3. **NEAR Investment Thesis** — a deterministic scorecard built from available 7-day and 30-day changes. Each signal is labelled positive, negative, stable or inconclusive. The dashboard exposes its calculation method, source registry and data-quality limitations.
+
+The public data endpoint gathers the source data independently of any model. It caches the latest snapshot for five minutes; the dashboard's refresh control requests a fresh snapshot. Missing source measurements remain unavailable instead of being fabricated. Wallet sign-in is retained only for the optional private/admin workspace.
+
+## What else remains in the repository
+
+The earlier private research-order and autonomous-business prototype remains in the codebase as a separate, authenticated workspace. It includes order-policy checks, report records, projected accounting, an off-chain audit ledger and a quote-only sandbox adapter. These are not required to use the public ecosystem dashboard and must not be presented as live customer payments or on-chain settlement.
 
 - Accepts a priced research order and applies minimum-price, daily-budget, kill-switch and revenue-split rules.
 - Retrieves chain TVL and historical TVL from DefiLlama.
@@ -34,7 +48,8 @@ A customer submits a blockchain research question. MERIDIAN gathers public data,
 
 ## Identity and account access
 
-- Visitors connect a NEAR wallet and sign a one-time NEP-413 message to prove control of their account.
+- The public NEAR intelligence dashboard does not require sign-in or wallet connection.
+- The optional private/admin workspace retains NEAR wallet authentication. Visitors who choose that route connect a NEAR wallet and sign a one-time NEP-413 message to prove control of their account.
 - The message is bound to the MERIDIAN dashboard recipient and a random 32-byte nonce that expires after five minutes and can be used once.
 - The backend verifies the NEP-413 signature and checks NEAR RPC to confirm the signing public key is currently a full-access key on the claimed account.
 - Login never calls `signAndSendTransaction`, never adds an access key, and never asks for a seed phrase or private key.
@@ -86,13 +101,13 @@ Edit `config/business-rules.yaml`:
 
 ## Architecture
 
-- **Dashboard:** Next.js research desk and business control room.
-- **Business API:** FastAPI order lifecycle, policy checks, research orchestration, accounting and ledger API.
-- **Research sources:** DefiLlama, NearBlocks, NEAR official research hub, NEAR AI Cloud documentation and NEAR Intents documentation.
-- **AI analysis:** question-specific NEAR AI Cloud inference over the gathered source context, with Gemini as a fallback provider.
-- **Treasury logic:** estimates inference cost, report price, projected profit and revenue shares.
-- **Database:** SQLAlchemy with PostgreSQL on Railway.
-- **Payments:** Tidepool community dry-quote adapter only; real NEAR Intents payment settlement and custody are not active.
+- **Public dashboard:** Next.js interface for network monitoring, developer activity and a deterministic evidence-based thesis.
+- **Public API:** FastAPI `/api/public/intelligence` endpoint; no wallet or session required.
+- **Research sources:** DefiLlama, NearBlocks and GitHub's public repository, README and commit APIs.
+- **Thesis calculation:** explicit percentage-change thresholds; no model inference is needed to calculate or display the public assessment.
+- **Private workspace:** legacy order lifecycle, business policy, research orchestration, accounting and audit-ledger API.
+- **Database:** SQLAlchemy with PostgreSQL on Railway for the private workspace.
+- **Payments:** disabled; the older Tidepool adapter is quote-only and not part of the public dashboard.
 
 ## Run locally
 
@@ -126,20 +141,23 @@ The backend CI compiles the application, runs the backend tests, and smoke-check
 
 ## Judge walkthrough
 
-1. Open the Railway dashboard.
-2. Submit a research question with a quote at or above the configured minimum.
-3. Review the chain TVL snapshot, filtered protocol table, excluded rows and data-quality warnings.
-4. Review NEAR activity metrics where NearBlocks returns a recognised daily series.
-5. Review official NEAR AI and NEAR Intents documentation facts, and distinguish them from publisher-displayed headline metrics.
-6. Inspect the Tidepool dry-quote preview (when available) and the audit ledger. The dashboard displays the returned quote preview alongside the report; it never creates a deposit address or marks the order paid.
-7. Confirm that revenue received remains zero and no transfer or payout is shown as completed.
+1. Open https://meridian-dashboard.up.railway.app. The public dashboard should load without requiring a wallet.
+2. Inspect the chain TVL, 7-day and 30-day changes, latest completed daily transactions and active/unique address counts, and stablecoin supply. Unavailable source fields must remain clearly labelled.
+3. Inspect the 30-observation TVL chart and check its retrieval timestamp and data-age note.
+4. Review the three investment-thesis signals. Explain the explicit threshold method: greater than +1% is positive, less than -1% is negative, and between those values is stable. Missing comparisons remain inconclusive.
+5. Inspect the NEAR-related GitHub project cards, latest repository pushes and commit messages. Open a repository to verify the evidence.
+6. Open the source registry and quality warnings. Explain that TVL is not user adoption, GitHub activity is not proof of production usage, and the rule-based thesis is not investment advice.
+7. Use Refresh data to request a fresh public snapshot.
+
+The optional wallet login is for the separate private/admin workspace only. The public product does not call NEAR AI Cloud or Gemini. Payment collection and mainnet execution remain disabled.
 
 ## Hackathon submission
 
 - Event: NEAR Hackathon 2026 — Build Beyond Boundaries.
-- Track: Autonomous Business (`business`).
+- Track: Investment Thesis.
 - Public repository: https://github.com/murisco/near-autonomous-research
 - Demo hosting: https://meridian-dashboard.up.railway.app
+- Public API: https://meridian-dashboard.up.railway.app/api/public/intelligence
 - Submission description and judge demo script: `docs/hackathon-submission.md`.
 
-MERIDIAN is explicit about the difference between live public data, publisher-reported metrics, AI analysis, quote previews, and actual onchain settlement.
+MERIDIAN separates independently queried metrics, repository metadata, deterministic assessment rules, unavailable fields and source limitations. It does not present a model-generated answer as evidence.
