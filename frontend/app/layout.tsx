@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "MERIDIAN | Autonomous Research Business",
-  description: "An AI-native research business built on NEAR, with source-backed reports, human-defined operating rules, and auditable business activity.",
+  title: "MERIDIAN | NEAR Ecosystem Intelligence",
+  description: "A public NEAR ecosystem intelligence dashboard for network fundamentals, developer activity, and a transparent evidence-based investment thesis.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
