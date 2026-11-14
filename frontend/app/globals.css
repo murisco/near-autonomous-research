@@ -166,6 +166,9 @@ tr:last-child td{border-bottom:0}
 .customer-intro h1{font:700 27px Manrope;margin:7px 0 5px;letter-spacing:-.8px}
 .customer-intro p{margin:0;color:#8290a0;font-size:12px;line-height:1.6}
 .customer-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:17px;align-items:start}
+.customer-primary-column{display:flex;flex-direction:column;gap:17px;min-width:0}
+.customer-report-panel{margin-bottom:0;scroll-margin-top:16px}
+.customer-report-panel .report-content{max-height:none;overflow:visible}
 .customer-orders{min-height:280px}
 .customer-orders>.panel-heading{margin-bottom:15px}
 .customer-order-list{display:flex;flex-direction:column}
