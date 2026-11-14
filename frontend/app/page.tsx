@@ -58,6 +58,81 @@ type LedgerEvent = {
   record_type: string;
 };
 
+type PublicMetric = {
+  status: string;
+  latest_day?: string;
+  latest_day_value?: number;
+  last_7d_total?: number;
+  last_7d_days?: number;
+  last_7d_vs_previous_7d_percent?: number | null;
+  reason?: string;
+};
+type PublicProject = {
+  name: string;
+  description?: string | null;
+  url?: string | null;
+  language?: string | null;
+  stars?: number | null;
+  forks?: number | null;
+  last_pushed_at?: string | null;
+  classification?: string;
+  readme_status?: string;
+  recent_commits?: Array<{ date?: string | null; message?: string; url?: string }>;
+};
+type PublicIntelligence = {
+  retrieved_at: string;
+  network: {
+    chain: string;
+    tvl_usd: number | null;
+    change_7d_percent: number | null;
+    change_30d_percent: number | null;
+    tvl_history: Array<{ date: string; tvl_usd: number }>;
+    history_age_hours: number | null;
+    top_protocols: Array<{ name: string; category: string; chain_tvl_usd: number }>;
+    quality_warnings: string[];
+    sources: string[];
+  };
+  activity: {
+    status: string;
+    transaction_stats: PublicMetric;
+    address_stats: PublicMetric;
+    sources: string[];
+    attribution?: string;
+  };
+  stablecoins: {
+    status: string;
+    total_supply_usd: number | null;
+    change_7d_percent: number | null;
+    change_30d_percent: number | null;
+    as_of?: string | null;
+    asset_count?: number;
+    sources: string[];
+    reason?: string;
+  };
+  developers: {
+    status: string;
+    projects: PublicProject[];
+    source?: string;
+    limitations?: string;
+  };
+  thesis: {
+    label: string;
+    summary: string;
+    signals: Array<{ name: string; period: string; change_percent: number | null; status: string; detail: string }>;
+    method: string;
+  };
+  disclaimer: string;
+};
+
+const compactUsd = (value: number | null | undefined) => {
+  if (value == null || !Number.isFinite(value)) return "Unavailable";
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 2 }).format(value);
+};
+const compactNumber = (value: number | null | undefined) =>
+  value == null || !Number.isFinite(value) ? "Unavailable" : new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 2 }).format(value);
+const signedPercent = (value: number | null | undefined) =>
+  value == null || !Number.isFinite(value) ? "Unavailable" : (value > 0 ? "+" : "") + value.toFixed(2) + "%";
+
 type Rules = {
   limits: { max_inference_spend_per_day: number; minimum_report_price: number };
   revenue_split: { operator_percent: number; contributors_percent: number };
@@ -134,6 +209,10 @@ export default function Home() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authBusy, setAuthBusy] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
+  const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [publicData, setPublicData] = useState<PublicIntelligence | null>(null);
+  const [publicLoading, setPublicLoading] = useState(true);
+  const [publicError, setPublicError] = useState("");
 
   const refresh = useCallback(async () => {
     try {
@@ -181,6 +260,24 @@ export default function Home() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const loadPublicIntelligence = useCallback(async (force = false) => {
+    setPublicLoading(true);
+    try {
+      const query = force ? "?refresh=true" : "";
+      const result = await api<PublicIntelligence>("public/intelligence" + query);
+      setPublicData(result);
+      setPublicError("");
+    } catch (err) {
+      setPublicError(err instanceof Error ? err.message : "Could not load live NEAR ecosystem data.");
+    } finally {
+      setPublicLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadPublicIntelligence();
+  }, [loadPublicIntelligence]);
 
   async function submitOrder(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -305,8 +402,156 @@ export default function Home() {
     ? selectedReport.markdown.slice(evidenceIndex)
     : "";
 
+  const tvlHistory = publicData?.network.tvl_history ?? [];
+  const tvlValues = tvlHistory.map((item) => item.tvl_usd);
+  const tvlMin = tvlValues.length ? Math.min(...tvlValues) : 0;
+  const tvlMax = tvlValues.length ? Math.max(...tvlValues) : 0;
+  const tvlPolyline = tvlHistory.map((item, index) => {
+    const x = tvlHistory.length <= 1 ? 0 : (index / (tvlHistory.length - 1)) * 600;
+    const y = 104 - ((item.tvl_usd - tvlMin) / Math.max(1, tvlMax - tvlMin)) * 84;
+    return x.toFixed(1) + "," + y.toFixed(1);
+  }).join(" ");
+
   if (authLoading) {
     return <main className="auth-screen"><div className="auth-card"><div className="brand-mark">M</div><h1>Loading MERIDIAN</h1><p>Checking your private workspace...</p></div></main>;
+  }
+
+  if (!authUser && !showAdminLogin) {
+    const tx = publicData?.activity.transaction_stats;
+    const addresses = publicData?.activity.address_stats;
+    const stablecoins = publicData?.stablecoins;
+    const positiveSignals = publicData?.thesis.signals.filter((item) => item.status === "positive").length ?? 0;
+    const negativeSignals = publicData?.thesis.signals.filter((item) => item.status === "negative").length ?? 0;
+    return (
+      <main className="public-shell">
+        <header className="public-header">
+          <div className="public-brand">
+            <div className="brand-mark">M</div>
+            <div><div className="brand-name">MERIDIAN</div><div className="brand-caption">NEAR ECOSYSTEM INTELLIGENCE</div></div>
+          </div>
+          <div className="public-actions">
+            <span className="public-live-pill"><span /> LIVE PUBLIC DATA</span>
+            <button className="public-button secondary" onClick={() => void loadPublicIntelligence(true)} disabled={publicLoading}>
+              {publicLoading ? "Refreshing…" : "Refresh data ↻"}
+            </button>
+            <button className="public-button" onClick={() => setShowAdminLogin(true)}>Admin sign in</button>
+          </div>
+        </header>
+
+        <section className="public-hero">
+          <div className="public-kicker">OPEN DATA · VERIFIABLE SIGNALS · NO AI-GENERATED CLAIMS</div>
+          <h1>Understand what is happening across NEAR.</h1>
+          <p>Explore network activity, developer momentum and an evidence-based ecosystem thesis. Every signal links back to its source.</p>
+          <div className="public-meta">
+            <span>Read-only intelligence dashboard</span>
+            <span>Wallet connection not required</span>
+            <span>{publicData ? "Updated " + new Date(publicData.retrieved_at).toLocaleString() : "Waiting for first data refresh"}</span>
+          </div>
+        </section>
+
+        {publicError && <div className="alert error-alert">{publicError}</div>}
+        <section className="public-section-heading">
+          <div><div className="eyebrow">01 / NETWORK MONITOR</div><h2>On-chain fundamentals</h2></div>
+          <span>{publicData?.network.chain ?? "NEAR"} · public sources</span>
+        </section>
+        <section className="public-stats-grid">
+          <article className="public-stat"><span>Chain TVL</span><strong>{compactUsd(publicData?.network.tvl_usd)}</strong><small>DefiLlama · current snapshot</small></article>
+          <article className="public-stat"><span>TVL change · 7 days</span><strong>{signedPercent(publicData?.network.change_7d_percent)}</strong><small>Historical chain TVL</small></article>
+          <article className="public-stat"><span>TVL change · 30 days</span><strong>{signedPercent(publicData?.network.change_30d_percent)}</strong><small>Historical chain TVL</small></article>
+          <article className="public-stat"><span>Daily transactions</span><strong>{tx?.status === "available" ? compactNumber(tx.latest_day_value) : "Unavailable"}</strong><small>{tx?.latest_day ?? "NearBlocks data unavailable"}</small></article>
+          <article className="public-stat"><span>Daily active / unique addresses</span><strong>{addresses?.status === "available" ? compactNumber(addresses.latest_day_value) : "Unavailable"}</strong><small>{addresses?.latest_day ?? "NearBlocks data unavailable"}</small></article>
+          <article className="public-stat"><span>Stablecoin supply</span><strong>{stablecoins?.status === "available" ? compactUsd(stablecoins.total_supply_usd) : "Unavailable"}</strong><small>{stablecoins?.asset_count ?? 0} assets · DefiLlama</small></article>
+        </section>
+
+        <section className="public-two-col">
+          <article className="public-panel">
+            <div className="public-panel-heading"><div><div className="eyebrow">CAPITAL TREND</div><h3>NEAR chain TVL · 30 observations</h3></div><span className="public-source-tag">DefiLlama</span></div>
+            {tvlHistory.length > 1 ? (
+              <div className="public-chart-wrap">
+                <svg viewBox="0 0 600 125" role="img" aria-label="NEAR historical chain TVL trend">
+                  <line x1="0" y1="104" x2="600" y2="104" stroke="#e6edf0" strokeWidth="1" />
+                  <line x1="0" y1="62" x2="600" y2="62" stroke="#edf1f3" strokeWidth="1" strokeDasharray="4 5" />
+                  <line x1="0" y1="20" x2="600" y2="20" stroke="#edf1f3" strokeWidth="1" strokeDasharray="4 5" />
+                  <polyline points={tvlPolyline} fill="none" stroke="#078b7c" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                <div className="public-chart-labels"><span>{tvlHistory[0]?.date}</span><span>{tvlHistory[tvlHistory.length - 1]?.date}</span></div>
+              </div>
+            ) : <p className="public-muted">{publicLoading ? "Loading historical observations…" : "Historical TVL series is unavailable."}</p>}
+            <div className="public-note">Latest historical observation age: {publicData?.network.history_age_hours != null ? publicData.network.history_age_hours.toFixed(1) + " hours" : "not available"}. The chart shows chain TVL, not users, fees or protocol revenue.</div>
+          </article>
+
+          <article className="public-panel thesis-panel">
+            <div className="eyebrow">02 / EVIDENCE-BASED ASSESSMENT</div>
+            <h3>NEAR ecosystem thesis</h3>
+            <div className={"thesis-label " + (publicData?.thesis.label === "Expansion signals" ? "positive" : publicData?.thesis.label === "Contraction signals" ? "negative" : "")}>
+              {publicData?.thesis.label ?? (publicLoading ? "Collecting evidence…" : "Insufficient evidence")}
+            </div>
+            <p>{publicData?.thesis.summary ?? "The assessment will appear when the source snapshot is ready."}</p>
+            <div className="thesis-counts"><span>{positiveSignals} positive signals</span><span>{negativeSignals} negative signals</span></div>
+            <div className="public-method">{publicData?.thesis.method ?? "No assessment method available yet."}</div>
+          </article>
+        </section>
+
+        <section className="public-panel public-signals">
+          <div className="public-panel-heading"><div><div className="eyebrow">SIGNAL BREAKDOWN</div><h3>What the evidence says</h3></div></div>
+          <div className="public-signal-list">
+            {(publicData?.thesis.signals ?? []).map((signal) => (
+              <div className="public-signal-row" key={signal.name}>
+                <div><strong>{signal.name}</strong><small>{signal.period}</small></div>
+                <span className={"signal-status " + signal.status}>{signal.status}</span>
+                <b>{signedPercent(signal.change_percent)}</b>
+                <p>{signal.detail}</p>
+              </div>
+            ))}
+            {!publicData?.thesis.signals.length && <p className="public-muted">{publicLoading ? "Calculating signals from live source data…" : "No comparable signals were returned."}</p>}
+          </div>
+        </section>
+
+        <section className="public-section-heading">
+          <div><div className="eyebrow">03 / DEVELOPER MOMENTUM</div><h2>Projects building around NEAR</h2></div>
+          <span>{publicData?.developers.projects.length ?? 0} repositories inspected</span>
+        </section>
+        <section className="public-panel">
+          <div className="public-project-grid">
+            {(publicData?.developers.projects ?? []).map((project) => {
+              const latest = project.recent_commits?.[0];
+              return (
+                <article className="public-project-card" key={project.name}>
+                  <div className="project-topline"><span>{project.classification?.replaceAll("_", " ") ?? "Unclassified"}</span><span>{project.language ?? "Repository"}</span></div>
+                  <h3>{project.name}</h3>
+                  <p>{project.description || "No repository description supplied."}</p>
+                  <div className="project-stats"><span>★ {compactNumber(project.stars)}</span><span>⑂ {compactNumber(project.forks)}</span><span>Last push {project.last_pushed_at ? new Date(project.last_pushed_at).toLocaleDateString() : "n/a"}</span></div>
+                  <div className="project-commit"><strong>Latest commit</strong><span>{latest?.message ?? "Commit message unavailable"}</span><small>{latest?.date ? new Date(latest.date).toLocaleDateString() : "No recent commit date"}</small></div>
+                  {project.url && <a href={project.url} target="_blank" rel="noreferrer">View repository ↗</a>}
+                </article>
+              );
+            })}
+            {!publicData?.developers.projects.length && <p className="public-muted">{publicLoading ? "Inspecting public GitHub repositories…" : "No project candidates returned by GitHub search."}</p>}
+          </div>
+          {publicData?.developers.limitations && <p className="public-note">{publicData.developers.limitations}</p>}
+        </section>
+
+        <section className="public-section-heading">
+          <div><div className="eyebrow">DATA TRANSPARENCY</div><h2>Sources and limitations</h2></div>
+        </section>
+        <section className="public-two-col">
+          <article className="public-panel">
+            <h3>Source registry</h3>
+            <ul className="public-source-list">
+              {(publicData?.network.sources ?? []).concat(publicData?.activity.sources ?? [], publicData?.stablecoins.sources ?? [], publicData?.developers.source ? [publicData.developers.source] : []).filter((url,index,all)=>all.indexOf(url)===index).map((url)=><li key={url}><a href={url} target="_blank" rel="noreferrer">{new URL(url).hostname}</a></li>)}
+            </ul>
+            <p className="public-note">Retrieved {publicData ? new Date(publicData.retrieved_at).toLocaleString() : "—"}. Data is cached for five minutes to avoid unnecessary provider requests.</p>
+          </article>
+          <article className="public-panel">
+            <h3>Quality warnings</h3>
+            {(publicData?.network.quality_warnings ?? []).length ? <ul>{publicData?.network.quality_warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul> : <p className="public-muted">No chain TVL quality warnings returned. This does not mean the dataset is complete.</p>}
+            <p className="public-note">{publicData?.disclaimer ?? "Metrics are not investment advice. Repository activity does not prove production adoption."}</p>
+          </article>
+        </section>
+
+        <footer className="public-footer">MERIDIAN · BUILT FOR THE NEAR ECOSYSTEM · READ-ONLY · NO WALLETS OR PAYMENTS REQUIRED</footer>
+      </main>
+    );
   }
 
   if (!authUser) {
@@ -316,6 +561,7 @@ export default function Home() {
           <div className="auth-brand"><div className="brand-mark">M</div><div><div className="brand-name">MERIDIAN</div><div className="brand-caption">PRIVATE RESEARCH WORKSPACE</div></div></div>
           <div className="eyebrow">NEAR IDENTITY</div>
           <h1>Sign in with NEAR</h1>
+          <button className="public-back-link" type="button" onClick={() => setShowAdminLogin(false)}>← Back to public dashboard</button>
           <p className="auth-description">Connect your NEAR wallet and sign one short message to prove account ownership. Your wallet keeps your keys.</p>
           <div className="auth-form">
             <button className="primary-button" type="button" onClick={() => void signInWithNear()} disabled={authBusy}>
