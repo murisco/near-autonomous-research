@@ -509,7 +509,7 @@ export default function Home() {
         </section>
 
         <section className="public-section-heading">
-          <div><div className="eyebrow">03 / DEVELOPER MOMENTUM</div><h2>Projects building around NEAR</h2></div>
+          <div><div className="eyebrow">03 / DEVELOPER MOMENTUM</div><h2>NEAR-related GitHub candidates</h2></div>
           <span>{publicData?.developers.projects.length ?? 0} repositories inspected</span>
         </section>
         <section className="public-panel">
@@ -521,6 +521,8 @@ export default function Home() {
                   <div className="project-topline"><span>{project.classification?.replaceAll("_", " ") ?? "Unclassified"}</span><span>{project.language ?? "Repository"}</span></div>
                   <h3>{project.name}</h3>
                   <p>{project.description || "No repository description supplied."}</p>
+                  {project.readme_evidence && <div className="project-evidence"><strong>README evidence reviewed</strong><span>{project.readme_evidence}</span></div>}
+                  <div className="project-screening-note">Screening label only. Repository metadata and README claims do not independently verify a deployed product or active users.</div>
                   <div className="project-stats"><span>★ {compactNumber(project.stars)}</span><span>⑂ {compactNumber(project.forks)}</span><span>Last push {project.last_pushed_at ? new Date(project.last_pushed_at).toLocaleDateString() : "n/a"}</span></div>
                   <div className="project-commit"><strong>Latest commit</strong><span>{latest?.message ?? "Commit message unavailable"}</span><small>{latest?.date ? new Date(latest.date).toLocaleDateString() : "No recent commit date"}</small></div>
                   {project.url && <a href={project.url} target="_blank" rel="noreferrer">View repository ↗</a>}
