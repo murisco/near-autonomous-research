@@ -14,7 +14,7 @@ A customer submits a blockchain research question. MERIDIAN gathers public data,
 - Retrieves daily NEAR transaction and address statistics from the NearBlocks API when the public endpoints return a recognised response. NearBlocks is credited in the report.
 - Reads NEAR's official Research & Analytics hub, NEAR AI Cloud documentation, and NEAR Intents documentation. Publisher-displayed metrics are explicitly separated from independently queried data.
 - Reports the official NEAR Intents homepage's volume headline as publisher-reported, not independently reconstructed. Transaction-level Intents Explorer data is marked unavailable unless a partner JWT is configured.
-- Optionally analyses the complete source context through NEAR AI Cloud when `NEAR_AI_API_KEY` is configured. Without the key, MERIDIAN creates a deterministic source summary and clearly says AI Cloud inference did not run.
+- Sends the complete source context and the customer's exact question to NEAR AI Cloud through its OpenAI-compatible chat-completions API. Gemini is the provider fallback if NEAR AI Cloud is unavailable. The report records the provider/model used and surfaces sanitized failure diagnostics when both providers fail.
 - Tracks estimated inference costs, quoted sales, projected profit and operator/contributor shares.
 - Records research source metadata, exclusions, payment previews and accounting decisions in an off-chain audit ledger.
 - Persists records in Railway PostgreSQL; SQLite is available for local development.
@@ -64,7 +64,9 @@ Set these only in Railway's service variables or a local untracked `.env` file. 
 
 - `NEAR_AI_API_KEY`: enables NEAR AI Cloud evidence synthesis.
 - `NEAR_AI_BASE_URL`: defaults to `https://cloud-api.near.ai/v1`.
-- `NEAR_AI_MODEL`: defaults to `zai-org/GLM-5.1-FP8`, following the current NEAR AI Cloud quickstart example.
+- `GEMINI_API_KEY`: enables the Gemini fallback when NEAR AI Cloud is unavailable.
+- `GEMINI_MODEL`: defaults to `gemini-3.8-flash`.
+- `NEAR_AI_MODEL`: defaults to `z-ai/glm-5.3-flash`.
 - `NEARBLOCKS_API_KEY`: optional bearer key for higher NearBlocks API limits.
 - `NEAR_INTENTS_EXPLORER_JWT`: partner JWT needed for transaction-level 1Click Explorer analytics. The current code does not claim explorer metrics without querying the API.
 
@@ -87,7 +89,7 @@ Edit `config/business-rules.yaml`:
 - **Dashboard:** Next.js research desk and business control room.
 - **Business API:** FastAPI order lifecycle, policy checks, research orchestration, accounting and ledger API.
 - **Research sources:** DefiLlama, NearBlocks, NEAR official research hub, NEAR AI Cloud documentation and NEAR Intents documentation.
-- **AI analysis:** optional NEAR AI Cloud OpenAI-compatible inference over the gathered source context.
+- **AI analysis:** question-specific NEAR AI Cloud inference over the gathered source context, with Gemini as a fallback provider.
 - **Treasury logic:** estimates inference cost, report price, projected profit and revenue shares.
 - **Database:** SQLAlchemy with PostgreSQL on Railway.
 - **Payments:** Tidepool community dry-quote adapter only; real NEAR Intents payment settlement and custody are not active.
