@@ -451,11 +451,11 @@ def _direction(value: float | None, name: str, period: str) -> dict:
 
 
 @app.get("/api/public/intelligence")
-async def public_intelligence() -> dict:
+async def public_intelligence(refresh: bool = False) -> dict:
     """Public read-only NEAR ecosystem snapshot. No wallet, AI inference, order or payment required."""
     global PUBLIC_INTELLIGENCE_CACHE, PUBLIC_INTELLIGENCE_CACHE_AT
     now_mono = clock.monotonic()
-    if PUBLIC_INTELLIGENCE_CACHE is not None and now_mono - PUBLIC_INTELLIGENCE_CACHE_AT < PUBLIC_INTELLIGENCE_CACHE_TTL_SECONDS:
+    if not refresh and PUBLIC_INTELLIGENCE_CACHE is not None and now_mono - PUBLIC_INTELLIGENCE_CACHE_AT < PUBLIC_INTELLIGENCE_CACHE_TTL_SECONDS:
         return PUBLIC_INTELLIGENCE_CACHE
 
     results = await asyncio.gather(
