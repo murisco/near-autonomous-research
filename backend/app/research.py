@@ -874,13 +874,13 @@ async def generate_live_report(
         ) if item
     )[:360]
     ai_status_banner = (
-        f"> **AI provider ({ai_meta.get('provider', 'unknown')}):** {ai_status_note}.\\n"
+        f"> **AI provider ({ai_meta.get('provider', 'unknown')}):** {ai_status_note}.\n"
         if ai_status == "completed"
         else (
             f"> **AI analysis notice:** {ai_meta.get('provider', 'AI provider')} did not return a model-generated analysis. "
             "The answer below is a limited deterministic source summary, not an AI response. "
             + (f"Provider diagnostic: {ai_failure_details} " if ai_failure_details else "")
-            + "\\n"
+            + "\n"
         )
     )
 
