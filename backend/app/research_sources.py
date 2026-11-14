@@ -316,6 +316,13 @@ async def collect_defillama_context(topic: str, default_chain: str = "Near") -> 
     return {
         "chain": selected,
         "current_tvl_usd": current_tvl,
+        "tvl_history": [
+            {
+                "date": datetime.fromtimestamp(timestamp_seconds(row["date"]), timezone.utc).date().isoformat(),
+                "tvl_usd": round(as_float(row["tvl"]) or 0.0, 2),
+            }
+            for row in clean_history[-30:]
+        ],
         "change_7d_percent": seven_day_change,
         "change_30d_percent": thirty_day_change,
         "tvl_anomaly_checks": tvl_anomalies,
