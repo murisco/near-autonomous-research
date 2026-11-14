@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import time as clock
 import json
 import os
 from datetime import datetime, time, timedelta
@@ -19,6 +21,10 @@ from .models import AuditEvent, AuthSession, NearLoginChallenge, Order, Report
 from .payments import create_tidepool_dry_quote
 from .policy import PolicyViolation, enforce_order_policy
 from .research import ResearchSourceError, generate_report
+from .research_sources import (
+    collect_defillama_context, collect_nearblocks_activity,
+    collect_stablecoin_context, collect_near_agent_projects,
+)
 from .schemas import DemoRunRequest, NearAuthVerifyRequest, OrderCreate
 from .auth import SESSION_COOKIE, SESSION_TTL_SECONDS, secure_cookie, token_digest
 from .near_auth import (
@@ -423,6 +429,109 @@ async def process_order(db: Session, request: OrderCreate, force_demo: bool = Fa
 @app.get("/health")
 def health() -> dict:
     return {"ok": True, "service": "meridian-api", "version": "0.1.0"}
+
+
+PUBLIC_INTELLIGENCE_CACHE: dict | None = None
+PUBLIC_INTELLIGENCE_CACHE_AT = 0.0
+PUBLIC_INTELLIGENCE_CACHE_TTL_SECONDS = 300
+
+
+def _direction(value: float | None, name: str, period: str) -> dict:
+    if value is None:
+        return {"name": name, "period": period, "change_percent": None, "status": "inconclusive",
+                "detail": "Not enough comparable source observations were available."}
+    if value > 1:
+        status = "positive"
+    elif value < -1:
+        status = "negative"
+    else:
+        status = "stable"
+    return {"name": name, "period": period, "change_percent": round(float(value), 2), "status": status,
+            "detail": f"{'Increased' if value > 1 else 'Decreased' if value < -1 else 'Was broadly stable'} by {value:+.2f}%."}
+
+
+@app.get("/api/public/intelligence")
+async def public_intelligence() -> dict:
+    """Public read-only NEAR ecosystem snapshot. No wallet, AI inference, order or payment required."""
+    global PUBLIC_INTELLIGENCE_CACHE, PUBLIC_INTELLIGENCE_CACHE_AT
+    now_mono = clock.monotonic()
+    if PUBLIC_INTELLIGENCE_CACHE is not None and now_mono - PUBLIC_INTELLIGENCE_CACHE_AT < PUBLIC_INTELLIGENCE_CACHE_TTL_SECONDS:
+        return PUBLIC_INTELLIGENCE_CACHE
+
+    results = await asyncio.gather(
+        collect_defillama_context("NEAR Protocol", "Near"),
+        collect_nearblocks_activity(),
+        collect_stablecoin_context("Near"),
+        collect_near_agent_projects(limit=6),
+        return_exceptions=True,
+    )
+    chain, activity, stablecoins, developers = results
+
+    if isinstance(chain, Exception):
+        chain = {"chain": "Near", "current_tvl_usd": None, "tvl_history": [],
+                 "change_7d_percent": None, "change_30d_percent": None,
+                 "history_age_hours": None, "top_protocols": [], "quality_warnings": [],
+                 "sources": ["https://api.llama.fi/v2/chains"],
+                 "error": "DefiLlama chain data is temporarily unavailable."}
+    if isinstance(activity, Exception):
+        activity = {"status": "unavailable", "transaction_stats": {"status": "unavailable"},
+                    "address_stats": {"status": "unavailable"}, "sources": ["https://api.nearblocks.io/api-docs/ui/"],
+                    "attribution": "Powered by NearBlocks.io APIs."}
+    if isinstance(stablecoins, Exception):
+        stablecoins = {"status": "unavailable", "total_supply_usd": None, "assets": [],
+                       "sources": ["https://defillama.com/stablecoins"]}
+    if isinstance(developers, Exception):
+        developers = {"status": "unavailable", "projects": [],
+                      "source": "https://api.github.com/search/repositories",
+                      "limitations": "GitHub project discovery is temporarily unavailable."}
+
+    signals = [
+        _direction(chain.get("change_30d_percent"), "NEAR chain TVL", "30 days"),
+        _direction((activity.get("transaction_stats") or {}).get("last_7d_vs_previous_7d_percent"),
+                   "Daily transactions", "latest 7 days vs previous 7 days"),
+        _direction(stablecoins.get("change_30d_percent"), "NEAR stablecoin supply", "30 days"),
+    ]
+    positives = sum(item["status"] == "positive" for item in signals)
+    negatives = sum(item["status"] == "negative" for item in signals)
+    conclusive = sum(item["status"] != "inconclusive" for item in signals)
+    if conclusive == 0:
+        thesis_label = "Insufficient evidence"
+    elif positives >= 2 and negatives == 0:
+        thesis_label = "Expansion signals"
+    elif negatives >= 2 and positives == 0:
+        thesis_label = "Contraction signals"
+    else:
+        thesis_label = "Mixed signals"
+
+    retrieved = datetime.utcnow().isoformat() + "Z"
+    payload = {
+        "retrieved_at": retrieved,
+        "cache_ttl_seconds": PUBLIC_INTELLIGENCE_CACHE_TTL_SECONDS,
+        "network": {
+            "chain": chain.get("chain", "Near"),
+            "tvl_usd": chain.get("current_tvl_usd"),
+            "change_7d_percent": chain.get("change_7d_percent"),
+            "change_30d_percent": chain.get("change_30d_percent"),
+            "tvl_history": chain.get("tvl_history", []),
+            "history_age_hours": chain.get("history_age_hours"),
+            "top_protocols": (chain.get("top_protocols") or [])[:8],
+            "quality_warnings": chain.get("quality_warnings", []),
+            "sources": chain.get("sources", []),
+        },
+        "activity": activity,
+        "stablecoins": stablecoins,
+        "developers": developers,
+        "thesis": {
+            "label": thesis_label,
+            "summary": f"{positives} positive, {negatives} negative and {len(signals) - positives - negatives} stable or inconclusive signals. This is a rule-based snapshot, not investment advice.",
+            "signals": signals,
+            "method": "Signals use observed percentage changes only: above +1% is positive, below -1% is negative, and values between are stable. Missing comparisons remain inconclusive.",
+        },
+        "disclaimer": "Metrics are attributed to their sources and may have different coverage windows. GitHub activity is repository metadata, not proof of production usage. No metric alone proves adoption or investment value.",
+    }
+    PUBLIC_INTELLIGENCE_CACHE = payload
+    PUBLIC_INTELLIGENCE_CACHE_AT = now_mono
+    return payload
 
 
 @app.get("/api/rules")
