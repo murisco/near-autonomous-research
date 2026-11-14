@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, ReactNode, useCallback, useEffect, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
 type DashboardData = {
   orders: number;
@@ -122,6 +122,13 @@ export default function Home() {
   const [notice, setNotice] = useState("");
   const [activeTab, setActiveTab] = useState<"orders" | "ledger">("orders");
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
+  const reportRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (selectedReport) {
+      reportRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [selectedReport?.id]);
   const [paymentQuote, setPaymentQuote] = useState<PaymentQuote | null>(null);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -334,6 +341,7 @@ export default function Home() {
         {notice && <div className="alert notice-alert">{notice}</div>}
         <section className="customer-intro"><div className="eyebrow">YOUR WORKSPACE</div><h1>Your research</h1><p>Your questions and reports are private to this account. Only you can access this research history.</p></section>
         <div className="customer-grid">
+          <div className="customer-primary-column">
           <section className="panel order-panel">
             <div className="panel-heading"><div><div className="eyebrow">RESEARCH DESK</div><h2>Create a report</h2></div><span className="mini-tag">NEW ORDER</span></div>
             <p className="panel-subtitle">What would you like MERIDIAN to investigate?</p>
@@ -345,6 +353,14 @@ export default function Home() {
               <p className="form-footnote">Your report will be saved to this private account. No customer payment is collected.</p>
             </form>
           </section>
+
+          {selectedReport && (
+            <section ref={reportRef} className="panel report-panel customer-report-panel">
+              <div className="panel-heading"><div><div className="eyebrow">YOUR REPORT · {selectedReport.data_mode.toUpperCase().replaceAll("_", " ")}</div><h2>{selectedReport.title}</h2></div><div className="report-actions"><button className="download-button" onClick={() => downloadReport(selectedReport)}>Download .md</button><button className="close-button" onClick={() => { setSelectedReport(null); setPaymentQuote(null); }}>Close ×</button></div></div>
+              <div className="report-content"><MarkdownView markdown={customerMarkdown} />{evidenceMarkdown && <details className="evidence-details"><summary>View full source data and methodology</summary><div className="evidence-content"><MarkdownView markdown={evidenceMarkdown} /></div></details>}</div>
+            </section>
+          )}
+          </div>
           <section className="panel customer-orders">
             <div className="panel-heading"><div><div className="eyebrow">PRIVATE HISTORY</div><h2>Your research orders</h2></div><button className="refresh-button" onClick={() => void refresh()} aria-label="Refresh orders">↻</button></div>
             {orders.length === 0 ? <p className="empty-cell">{loading ? "Loading your orders..." : "Your research history will appear here after your first order."}</p> : (
@@ -359,12 +375,6 @@ export default function Home() {
             )}
           </section>
         </div>
-        {selectedReport && (
-          <section className="panel report-panel">
-            <div className="panel-heading"><div><div className="eyebrow">YOUR REPORT · {selectedReport.data_mode.toUpperCase().replaceAll("_", " ")}</div><h2>{selectedReport.title}</h2></div><div className="report-actions"><button className="download-button" onClick={() => downloadReport(selectedReport)}>Download .md</button><button className="close-button" onClick={() => { setSelectedReport(null); setPaymentQuote(null); }}>Close ×</button></div></div>
-            <div className="report-content"><MarkdownView markdown={customerMarkdown} />{evidenceMarkdown && <details className="evidence-details"><summary>View full source data and methodology</summary><div className="evidence-content"><MarkdownView markdown={evidenceMarkdown} /></div></details>}</div>
-          </section>
-        )}
         <footer className="customer-footer">MERIDIAN · PRIVATE RESEARCH · PAYMENTS DISABLED</footer>
       </main>
     );
