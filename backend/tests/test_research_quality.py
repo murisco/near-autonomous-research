@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 
 from backend.app import research_sources as sources
+from backend.app import research as research_module
 from backend.app.research import _customer_summary, _is_defi_protocol_question
 from backend.app.research_sources import (
     analyse_tvl_history,
@@ -324,3 +325,103 @@ def test_near_ai_default_model_uses_current_documented_model_id():
 
 def test_gemini_free_model_is_default():
     assert sources.GEMINI_DEFAULT_MODEL == "gemini-3.8-flash"
+
+
+def test_near_ai_cloud_primary_uses_official_chat_completions_endpoint(monkeypatch):
+    monkeypatch.setenv("NEAR_AI_API_KEY", "unit-test-key")
+    monkeypatch.delenv("NEAR_AI_BASE_URL", raising=False)
+    monkeypatch.delenv("NEAR_AI_MODEL", raising=False)
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "id": "chatcmpl-test",
+                "choices": [{"message": {"content": "A question-specific NEAR AI answer."}}],
+                "usage": {"prompt_tokens": 50, "completion_tokens": 20},
+            }
+
+    class FakeClient:
+        request = None
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            FakeClient.request = {"url": url, "headers": headers, "json": json}
+            return FakeResponse()
+
+    monkeypatch.setattr(research_module.httpx, "AsyncClient", FakeClient)
+    content, metadata = asyncio.run(
+        research_module._generate_near_ai_cloud_analysis(
+            "How has NEAR developer activity changed?", {"nearblocks": {"active_accounts": 123}}
+        )
+    )
+
+    assert content == "A question-specific NEAR AI answer."
+    assert metadata["status"] == "completed"
+    assert metadata["provider"] == "near_ai_cloud"
+    assert FakeClient.request["url"] == "https://cloud-api.near.ai/v1/chat/completions"
+    assert FakeClient.request["headers"]["Authorization"] == "Bearer unit-test-key"
+    assert FakeClient.request["json"]["model"] == sources.NEAR_AI_DEFAULT_MODEL
+    assert "How has NEAR developer activity changed?" in FakeClient.request["json"]["messages"][1]["content"]
+    assert "active_accounts" in FakeClient.request["json"]["messages"][1]["content"]
+
+
+def test_near_ai_analysis_uses_gemini_only_when_near_ai_cloud_fails(monkeypatch):
+    async def near_failure(topic, context):
+        return None, {
+            "status": "unavailable",
+            "provider": "near_ai_cloud",
+            "model": "z-ai/glm-5.3-flash",
+            "error": "NEAR AI Cloud API returned HTTP 401: unauthorized",
+        }
+
+    async def gemini_success(topic, context):
+        return "Gemini's report for: " + topic, {
+            "status": "completed",
+            "provider": "google_gemini",
+            "model": "gemini-3.8-flash",
+        }
+
+    monkeypatch.setattr(research_module, "_generate_near_ai_cloud_analysis", near_failure)
+    monkeypatch.setattr(research_module, "_generate_gemini_analysis", gemini_success)
+
+    content, metadata = asyncio.run(
+        research_module.generate_near_ai_analysis("Compare NEAR stablecoins", {"stablecoins": {}})
+    )
+
+    assert content == "Gemini's report for: Compare NEAR stablecoins"
+    assert metadata["provider"] == "google_gemini"
+    assert metadata["fallback_from"] == "near_ai_cloud"
+    assert "HTTP 401" in metadata["near_ai_cloud_error"]
+
+
+def test_near_ai_analysis_retains_both_provider_errors_when_all_ai_fails(monkeypatch):
+    async def near_failure(topic, context):
+        return None, {"error": "NEAR AI Cloud returned HTTP 503: busy", "model": "model-a"}
+
+    async def gemini_failure(topic, context):
+        return None, {"error": "Gemini returned HTTP 429: quota", "model": "model-b"}
+
+    monkeypatch.setattr(research_module, "_generate_near_ai_cloud_analysis", near_failure)
+    monkeypatch.setattr(research_module, "_generate_gemini_analysis", gemini_failure)
+
+    content, metadata = asyncio.run(
+        research_module.generate_near_ai_analysis("What is NEAR?", {})
+    )
+
+    assert content is None
+    assert metadata["provider"] == "near_ai_cloud+google_gemini"
+    assert "HTTP 503" in metadata["near_ai_cloud_error"]
+    assert "HTTP 429" in metadata["gemini_error"]
