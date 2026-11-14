@@ -551,8 +551,10 @@ async def _generate_gemini_analysis(topic: str, context: dict) -> tuple[str | No
             try:
                 response = await client.post(
                     f"{GEMINI_API_BASE}/models/{model}:generateContent",
-                    params={"key": gemini_key},
-                    headers={"Content-Type": "application/json"},
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": gemini_key,
+                    },
                     json=payload,
                 )
                 if response.status_code in (429, 500, 502, 503, 504) and attempt == 0:
@@ -599,147 +601,159 @@ async def _generate_gemini_analysis(topic: str, context: dict) -> tuple[str | No
     }
 
 
-async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | None, dict]:
-    """Prefer AgentRouter, then use Gemini if the gateway or model route is unavailable."""
-    api_key = os.getenv("AGENTROUTER_API_KEY", "").strip()
-    base_url = os.getenv("AGENTROUTER_BASE_URL", "https://agentrouter.org/v1").strip().rstrip("/")
-    primary_model = (os.getenv("AGENTROUTER_MODEL") or "gpt-5.6-sol").strip()
-    fallback_model = (os.getenv("AGENTROUTER_FALLBACK_MODEL") or "gpt-6-astra").strip()
+async def _generate_near_ai_cloud_analysis(
+    topic: str, context: dict
+) -> tuple[str | None, dict]:
+    """Run MERIDIAN analysis through NEAR AI Cloud's OpenAI-compatible API."""
+    api_key = os.getenv("NEAR_AI_API_KEY", "").strip()
+    base_url = (
+        os.getenv("NEAR_AI_BASE_URL") or "https://cloud-api.near.ai/v1"
+    ).strip().rstrip("/")
+    model = (os.getenv("NEAR_AI_MODEL") or NEAR_AI_DEFAULT_MODEL).strip()
 
     if not api_key:
-        gemini_content, gemini_meta = await _generate_gemini_analysis(topic, context)
-        if gemini_content:
-            gemini_meta["fallback_from"] = "agentrouter_not_configured"
-            return gemini_content, gemini_meta
         return None, {
-            "status": "unavailable_fallback_used", "provider": "agentrouter+google_gemini",
-            "model": primary_model, "error": "AgentRouter is not configured; Gemini fallback is unavailable.",
-            "gemini_error": gemini_meta.get("error"),
+            "status": "not_configured",
+            "provider": "near_ai_cloud",
+            "model": model,
+            "error": "NEAR_AI_API_KEY is missing or empty.",
         }
 
     instructions = (
-        "You are MERIDIAN's blockchain research analyst. Use only supplied research context. "
-        "Never invent metrics, projects, capabilities, events or sources. Separate measured data, "
-        "publisher claims and analysis. Answer the exact question and cover each requested dimension. "
-        "NEAR Protocol means the NEAR blockchain, not DeFi protocols. State clearly when evidence is missing."
+        "You are MERIDIAN, an evidence-led blockchain and technology research analyst. "
+        "Answer the customer's exact research question, not a generic question about DeFi. "
+        "Use only the supplied research context for factual claims about current metrics, "
+        "projects, releases or events. Never invent numbers, dates, sources or capabilities. "
+        "Separate independently queried measurements, publisher-reported claims and your analysis. "
+        "Use only the metrics relevant to the question. If a requested dimension is not supported "
+        "by the supplied evidence, explicitly say what is missing and do not substitute unrelated "
+        "TVL figures. Write a clear, specific report with headings, concrete findings, implications, "
+        "risks and a concise conclusion. Avoid boilerplate and repeated generic advice."
     )
-    user_input = (
-        "Customer's exact research question: " + topic + "\n\n"
-        "Verified and publisher-reported source context (JSON):\n"
+    prompt = (
+        "EXACT CUSTOMER QUESTION:\n"
+        + topic
+        + "\n\nRESEARCH CONTEXT (JSON; source values and source URLs are the evidence boundary):\n"
         + json.dumps(context, sort_keys=True, ensure_ascii=False)
-        + "\n\nAnswer the exact question. Cover every requested dimension. Do not replace missing "
-        "evidence with unrelated metrics. Distinguish observed data, publisher-reported claims and "
-        "analytical judgement. Cite supplied source names inline."
+        + "\n\nRESPONSE REQUIREMENTS:\n"
+        "1. Start with a direct answer to the exact question.\n"
+        "2. Identify the relevant findings in the supplied context and explain why they matter.\n"
+        "3. Address each distinct part of the question separately.\n"
+        "4. Do not force NEAR chain TVL or stablecoin data into a question where it is irrelevant.\n"
+        "5. Distinguish facts from interpretation and name the supplied sources supporting key facts.\n"
+        "6. State limitations plainly. Do not claim that missing evidence proves something is zero.\n"
+        "7. Give a conclusion specific to this question, not a reusable generic conclusion."
     )
-    models = list(dict.fromkeys([primary_model, fallback_model]))
-    timeout = httpx.Timeout(90.0, connect=12.0)
-    attempts = []
-    terminal_error = None
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.25,
+        "max_tokens": 2400,
+    }
+    timeout = httpx.Timeout(75.0, connect=10.0)
+    last_error = None
 
     async with httpx.AsyncClient(timeout=timeout) as client:
-        for model_index, model in enumerate(models):
-            for attempt in range(2):
+        for attempt in range(2):
+            try:
+                response = await client.post(
+                    base_url + "/chat/completions",
+                    headers={
+                        "Authorization": "Bearer " + api_key,
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+                if response.status_code in (429, 500, 502, 503, 504) and attempt == 0:
+                    await __import__("asyncio").sleep(1.0)
+                    continue
+                response.raise_for_status()
+                result = response.json()
+                choices = result.get("choices") or []
+                message = (choices[0].get("message") or {}) if choices else {}
+                content_value = message.get("content")
+                if isinstance(content_value, str):
+                    content = content_value.strip()
+                elif isinstance(content_value, list):
+                    content = "\n".join(
+                        str(part.get("text", ""))
+                        for part in content_value
+                        if isinstance(part, dict) and part.get("text")
+                    ).strip()
+                else:
+                    content = ""
+                if not content:
+                    raise ValueError("NEAR AI Cloud returned an empty analysis.")
+                return content, {
+                    "status": "completed",
+                    "provider": "near_ai_cloud",
+                    "model": model,
+                    "response_id": result.get("id"),
+                    "usage": result.get("usage"),
+                }
+            except httpx.HTTPStatusError as exc:
                 try:
-                    response = await client.post(
-                        base_url + "/responses",
-                        headers={
-                            "Authorization": "Bearer " + api_key,
-                            "Content-Type": "application/json",
-                        },
-                        json={
-                            "model": model,
-                            "instructions": instructions,
-                            "input": user_input,
-                            "max_output_tokens": 1800,
-                            "temperature": 0.15,
-                        },
-                    )
-                    if response.status_code in (429, 500, 502, 503, 504):
-                        attempts.append({"model": model, "http_status": response.status_code})
-                        if attempt == 0:
-                            await __import__("asyncio").sleep(1.0)
-                            continue
-                        break
-                    response.raise_for_status()
-                    try:
-                        result = response.json()
-                    except json.JSONDecodeError:
-                        body_preview = response.text[:500].replace(api_key, "[redacted]")
-                        attempts.append({
-                            "model": model,
-                            "http_status": response.status_code,
-                            "error": "JSONDecodeError",
-                            "content_type": response.headers.get("content-type", "")[:120],
-                            "body_preview": body_preview,
-                        })
-                        break
-                    text_parts = []
-                    for output_item in result.get("output", []):
-                        if not isinstance(output_item, dict) or output_item.get("type") != "message":
-                            continue
-                        for part in output_item.get("content", []):
-                            if isinstance(part, dict) and part.get("type") == "output_text" and isinstance(part.get("text"), str):
-                                text_parts.append(part["text"])
-                    content = "\n".join(text_parts).strip()
-                    if not content:
-                        raise ValueError("AgentRouter returned an empty analysis.")
-                    return content, {
-                        "status": "completed", "provider": "agentrouter",
-                        "model": model, "fallback_used": model_index > 0,
-                        "usage": result.get("usage"), "response_id": result.get("id"),
-                        "attempts": attempts,
-                    }
-                except httpx.HTTPStatusError as exc:
-                    status_code = exc.response.status_code
-                    try:
-                        error_payload = exc.response.json()
-                        message = (
-                            (error_payload.get("error") or {}).get("message")
-                            or error_payload.get("message") or ""
-                        ).strip()
-                    except (ValueError, TypeError, AttributeError):
-                        message = ""
-                    safe_message = message.replace(api_key, "[redacted]")[:180] if message else "AgentRouter rejected the request."
-                    attempts.append({
-                        "model": model,
-                        "http_status": status_code,
-                        "error": safe_message,
-                    })
-                    if status_code in (429, 500, 502, 503, 504):
-                        if attempt == 0:
-                            await __import__("asyncio").sleep(1.0)
-                            continue
-                        break
-                    terminal_error = f"AgentRouter API returned HTTP {status_code}: {safe_message}"
-                    break
-                except httpx.RequestError as exc:
-                    attempts.append({"model": model, "error": type(exc).__name__})
-                    if attempt == 0:
-                        await __import__("asyncio").sleep(1.0)
-                        continue
-                    break
-                except (ValueError, KeyError, TypeError) as exc:
-                    attempts.append({"model": model, "error": type(exc).__name__})
-                    break
-            # A 401 client-identity rejection applies to the gateway, not just one model.
-            if terminal_error:
+                    error_payload = exc.response.json()
+                    error_value = error_payload.get("error") or {}
+                    message = (
+                        error_value.get("message")
+                        if isinstance(error_value, dict)
+                        else str(error_value)
+                    ) or error_payload.get("message") or ""
+                    message = str(message).strip()
+                except (ValueError, TypeError, AttributeError):
+                    message = ""
+                safe_message = message.replace(api_key, "[redacted]")[:180]
+                last_error = (
+                    f"NEAR AI Cloud API returned HTTP {exc.response.status_code}: "
+                    f"{safe_message or 'request rejected'}"
+                )
+                if exc.response.status_code in (429, 500, 502, 503, 504) and attempt == 0:
+                    await __import__("asyncio").sleep(1.0)
+                    continue
                 break
+            except httpx.RequestError as exc:
+                last_error = f"NEAR AI Cloud network request failed ({type(exc).__name__})."
+                if attempt == 0:
+                    await __import__("asyncio").sleep(1.0)
+                    continue
+                break
+            except (ValueError, KeyError, IndexError, TypeError) as exc:
+                last_error = f"NEAR AI Cloud response could not be parsed ({type(exc).__name__})."
+                break
+
+    return None, {
+        "status": "unavailable",
+        "provider": "near_ai_cloud",
+        "model": model,
+        "error": last_error or "NEAR AI Cloud analysis was unavailable.",
+    }
+
+
+async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | None, dict]:
+    """Use NEAR AI Cloud first, with Gemini as a separate provider fallback."""
+    near_content, near_meta = await _generate_near_ai_cloud_analysis(topic, context)
+    if near_content:
+        return near_content, near_meta
 
     gemini_content, gemini_meta = await _generate_gemini_analysis(topic, context)
     if gemini_content:
-        gemini_meta["fallback_from"] = "agentrouter"
-        gemini_meta["agentrouter_error"] = terminal_error or "AgentRouter model requests failed."
-        gemini_meta["agentrouter_attempts"] = attempts
+        gemini_meta["fallback_from"] = "near_ai_cloud"
+        gemini_meta["near_ai_cloud_error"] = near_meta.get("error")
         return gemini_content, gemini_meta
 
     return None, {
-        "status": "unavailable_fallback_used", "provider": "agentrouter+google_gemini",
-        "model": primary_model, "fallback_model": fallback_model,
-        "error": "AgentRouter and Gemini analysis were unavailable.",
-        "agentrouter_error": terminal_error,
-        "agentrouter_attempts": attempts,
+        "status": "unavailable_fallback_used",
+        "provider": "near_ai_cloud+google_gemini",
+        "model": near_meta.get("model"),
+        "error": "NEAR AI Cloud and Gemini did not return an analysis.",
+        "near_ai_cloud_error": near_meta.get("error"),
         "gemini_error": gemini_meta.get("error"),
     }
+
 
 async def generate_live_report(
     topic: str, default_chain: str = "Near"
@@ -852,13 +866,21 @@ async def generate_live_report(
         else "not configured" if ai_status == "not_configured"
         else "unavailable; deterministic fallback used"
     )
+    ai_failure_details = "; ".join(
+        str(item) for item in (
+            ai_meta.get("near_ai_cloud_error"),
+            ai_meta.get("gemini_error"),
+            ai_meta.get("error"),
+        ) if item
+    )[:360]
     ai_status_banner = (
-        f"> **AI provider ({ai_meta.get('provider', 'unknown')}):** {ai_status_note}.\n"
+        f"> **AI provider ({ai_meta.get('provider', 'unknown')}):** {ai_status_note}.\\n"
         if ai_status == "completed"
         else (
-            f"> **AI analysis notice:** {ai_meta.get('provider', 'AI provider')} did not return an analysis for this order. "
-            "The answer below is a deterministic, source-driven fallback, not a model-generated response. "
-            "Some requested areas may remain unanswered. Check the audit record for the failure detail.\n"
+            f"> **AI analysis notice:** {ai_meta.get('provider', 'AI provider')} did not return a model-generated analysis. "
+            "The answer below is a limited deterministic source summary, not an AI response. "
+            + (f"Provider diagnostic: {ai_failure_details} " if ai_failure_details else "")
+            + "\\n"
         )
     )
 
