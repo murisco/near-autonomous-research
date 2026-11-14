@@ -514,17 +514,107 @@ def _customer_summary(
     return "\n".join(lines)
 
 
+async def _generate_gemini_analysis(topic: str, context: dict) -> tuple[str | None, dict]:
+    """Use Gemini as a genuine provider fallback when AgentRouter is unavailable."""
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    model = (os.getenv("GEMINI_MODEL") or GEMINI_DEFAULT_MODEL).strip()
+    if not gemini_key:
+        return None, {
+            "status": "not_configured", "provider": "google_gemini",
+            "model": model, "error": "GEMINI_API_KEY is missing or empty.",
+        }
+
+    instructions = (
+        "You are MERIDIAN's blockchain research analyst. Use only supplied research context. "
+        "Never invent metrics, projects, capabilities, events or sources. Separate measured data, "
+        "publisher claims and analysis. Answer the exact question and cover each requested dimension. "
+        "NEAR Protocol means the NEAR blockchain, not DeFi protocols. State clearly when evidence is missing."
+    )
+    prompt = (
+        "Customer's exact research question: " + topic + "\n\n"
+        "Verified and publisher-reported source context (JSON):\n"
+        + json.dumps(context, sort_keys=True, ensure_ascii=False)
+        + "\n\nAnswer the exact question. Cover every requested dimension. Do not replace missing "
+        "evidence with unrelated metrics. Distinguish observed data, publisher-reported claims and "
+        "analytical judgement. Cite supplied source names inline."
+    )
+    payload = {
+        "system_instruction": {"parts": [{"text": instructions}]},
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.15, "maxOutputTokens": 1800},
+    }
+    timeout = httpx.Timeout(75.0, connect=10.0)
+    last_error = None
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(2):
+            try:
+                response = await client.post(
+                    f"{GEMINI_API_BASE}/models/{model}:generateContent",
+                    params={"key": gemini_key},
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                )
+                if response.status_code in (429, 500, 502, 503, 504) and attempt == 0:
+                    await __import__("asyncio").sleep(1.0)
+                    continue
+                response.raise_for_status()
+                result = response.json()
+                parts = result["candidates"][0]["content"]["parts"]
+                content = "\n".join(
+                    part["text"] for part in parts
+                    if isinstance(part, dict) and isinstance(part.get("text"), str)
+                ).strip()
+                if not content:
+                    raise ValueError("Gemini returned an empty analysis.")
+                return content, {
+                    "status": "completed", "provider": "google_gemini",
+                    "model": model, "usage": result.get("usageMetadata"),
+                }
+            except httpx.HTTPStatusError as exc:
+                try:
+                    error_payload = exc.response.json()
+                    message = ((error_payload.get("error") or {}).get("message") or "").strip()
+                except (ValueError, TypeError, AttributeError):
+                    message = ""
+                safe_message = message.replace(gemini_key, "[redacted]")[:180]
+                last_error = f"Gemini API returned HTTP {exc.response.status_code}: {safe_message or 'request rejected'}"
+                if exc.response.status_code in (429, 500, 502, 503, 504) and attempt == 0:
+                    await __import__("asyncio").sleep(1.0)
+                    continue
+                break
+            except httpx.RequestError as exc:
+                last_error = f"Gemini network request failed ({type(exc).__name__})."
+                if attempt == 0:
+                    await __import__("asyncio").sleep(1.0)
+                    continue
+                break
+            except (ValueError, KeyError, IndexError, TypeError) as exc:
+                last_error = f"Gemini response could not be parsed ({type(exc).__name__})."
+                break
+
+    return None, {
+        "status": "unavailable_fallback_used", "provider": "google_gemini",
+        "model": model, "error": last_error or "Gemini analysis was unavailable.",
+    }
+
+
 async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | None, dict]:
-    """Generate research analysis through AgentRouter Responses API with bounded model fallback."""
+    """Prefer AgentRouter, then use Gemini if the gateway or model route is unavailable."""
     api_key = os.getenv("AGENTROUTER_API_KEY", "").strip()
     base_url = os.getenv("AGENTROUTER_BASE_URL", "https://agentrouter.org/v1").strip().rstrip("/")
     primary_model = (os.getenv("AGENTROUTER_MODEL") or "gpt-5.6-sol").strip()
     fallback_model = (os.getenv("AGENTROUTER_FALLBACK_MODEL") or "gpt-6-astra").strip()
 
     if not api_key:
+        gemini_content, gemini_meta = await _generate_gemini_analysis(topic, context)
+        if gemini_content:
+            gemini_meta["fallback_from"] = "agentrouter_not_configured"
+            return gemini_content, gemini_meta
         return None, {
-            "status": "not_configured", "provider": "agentrouter",
-            "model": primary_model, "error": "AGENTROUTER_API_KEY is missing or empty.",
+            "status": "unavailable_fallback_used", "provider": "agentrouter+google_gemini",
+            "model": primary_model, "error": "AgentRouter is not configured; Gemini fallback is unavailable.",
+            "gemini_error": gemini_meta.get("error"),
         }
 
     instructions = (
@@ -544,10 +634,10 @@ async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | No
     models = list(dict.fromkeys([primary_model, fallback_model]))
     timeout = httpx.Timeout(90.0, connect=12.0)
     attempts = []
+    terminal_error = None
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         for model_index, model in enumerate(models):
-            # Retry only transient gateway/provider failures once before switching models.
             for attempt in range(2):
                 try:
                     response = await client.post(
@@ -574,9 +664,6 @@ async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | No
                     try:
                         result = response.json()
                     except json.JSONDecodeError:
-                        # A 2xx response can still contain an HTML gateway page,
-                        # plain text, or an unexpected upstream payload. Record a
-                        # short redacted preview so the audit trail shows why parsing failed.
                         body_preview = response.text[:500].replace(api_key, "[redacted]")
                         attempts.append({
                             "model": model,
@@ -612,18 +699,19 @@ async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | No
                         ).strip()
                     except (ValueError, TypeError, AttributeError):
                         message = ""
-                    attempts.append({"model": model, "http_status": status_code})
+                    safe_message = message.replace(api_key, "[redacted]")[:180] if message else "AgentRouter rejected the request."
+                    attempts.append({
+                        "model": model,
+                        "http_status": status_code,
+                        "error": safe_message,
+                    })
                     if status_code in (429, 500, 502, 503, 504):
                         if attempt == 0:
                             await __import__("asyncio").sleep(1.0)
                             continue
                         break
-                    safe_message = message.replace(api_key, "[redacted]")[:180] if message else "AgentRouter rejected the request."
-                    return None, {
-                        "status": "unavailable_fallback_used", "provider": "agentrouter",
-                        "model": model, "error": f"AgentRouter API returned HTTP {status_code}: {safe_message}",
-                        "attempts": attempts,
-                    }
+                    terminal_error = f"AgentRouter API returned HTTP {status_code}: {safe_message}"
+                    break
                 except httpx.RequestError as exc:
                     attempts.append({"model": model, "error": type(exc).__name__})
                     if attempt == 0:
@@ -633,12 +721,24 @@ async def generate_near_ai_analysis(topic: str, context: dict) -> tuple[str | No
                 except (ValueError, KeyError, TypeError) as exc:
                     attempts.append({"model": model, "error": type(exc).__name__})
                     break
+            # A 401 client-identity rejection applies to the gateway, not just one model.
+            if terminal_error:
+                break
+
+    gemini_content, gemini_meta = await _generate_gemini_analysis(topic, context)
+    if gemini_content:
+        gemini_meta["fallback_from"] = "agentrouter"
+        gemini_meta["agentrouter_error"] = terminal_error or "AgentRouter model requests failed."
+        gemini_meta["agentrouter_attempts"] = attempts
+        return gemini_content, gemini_meta
 
     return None, {
-        "status": "unavailable_fallback_used", "provider": "agentrouter",
+        "status": "unavailable_fallback_used", "provider": "agentrouter+google_gemini",
         "model": primary_model, "fallback_model": fallback_model,
-        "error": "AgentRouter analysis failed on the primary and fallback models.",
-        "attempts": attempts,
+        "error": "AgentRouter and Gemini analysis were unavailable.",
+        "agentrouter_error": terminal_error,
+        "agentrouter_attempts": attempts,
+        "gemini_error": gemini_meta.get("error"),
     }
 
 async def generate_live_report(
