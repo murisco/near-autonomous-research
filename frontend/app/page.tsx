@@ -420,6 +420,7 @@ export default function Home() {
     const tx = publicData?.activity.transaction_stats;
     const addresses = publicData?.activity.address_stats;
     const stablecoins = publicData?.stablecoins;
+    const sourceUrls = publicData ? [...publicData.network.sources, ...publicData.activity.sources, ...publicData.stablecoins.sources, ...(publicData.developers.source ? [publicData.developers.source] : [])].filter((url, index, all) => all.indexOf(url) === index) : [];
     const positiveSignals = publicData?.thesis.signals.filter((item) => item.status === "positive").length ?? 0;
     const negativeSignals = publicData?.thesis.signals.filter((item) => item.status === "negative").length ?? 0;
     return (
@@ -538,7 +539,7 @@ export default function Home() {
           <article className="public-panel">
             <h3>Source registry</h3>
             <ul className="public-source-list">
-              {(publicData?.network.sources ?? []).concat(publicData?.activity.sources ?? [], publicData?.stablecoins.sources ?? [], publicData?.developers.source ? [publicData.developers.source] : []).filter((url,index,all)=>all.indexOf(url)===index).map((url)=><li key={url}><a href={url} target="_blank" rel="noreferrer">{new URL(url).hostname}</a></li>)}
+              {sourceUrls.map((url)=><li key={url}><a href={url} target="_blank" rel="noreferrer">{new URL(url).hostname}</a></li>)}
             </ul>
             <p className="public-note">Retrieved {publicData ? new Date(publicData.retrieved_at).toLocaleString() : "—"}. Data is cached for five minutes to avoid unnecessary provider requests.</p>
           </article>
